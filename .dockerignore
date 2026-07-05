@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+.coverage
+.DS_Store
+__pycache__
+outputs
+logs
+.env
+test0702.zip
+TodoList
+tests
+scripts
+场景一：上市公司信息抓取与分析.pdf
