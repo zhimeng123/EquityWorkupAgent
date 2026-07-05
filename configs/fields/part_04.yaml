@@ -1,0 +1,49 @@
+fields:
+  - field_id: revenue_breakdown
+    label: Revenue Breakdown by Business Segment and Geography
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 3
+            row_index: 0
+            column_index: 0
+        expected_text: 可在东方财富网上抓取最近两年和最新半年（若有）的信息
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: quarterly_revenue_profitability
+    label: Revenue Trend and Profitability
+    source_type: eastmoney
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 4
+            row_index: 0
+            column_index: 0
+        expected_text: 可在东方财富网上抓取最近两年的分季度信息
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: customers_suppliers_concentration
+    label: Major Customers and Suppliers
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 5
+            row_index: 0
+            column_index: 0
+        expected_text: 可在最新年报上抓取主要客户、主要供应商信息
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: business_outlook_risks
+    label: Business Outlook and Risks
+    source_type: annual_report
+    locators:
+      - kind: paragraph
+        paragraph_index: 30
+        expected_text: "Business outlook and any other business risks (e.g. concentration of suppliers/ customers):"
+    write_strategy: append_after_label
+    output_format: text

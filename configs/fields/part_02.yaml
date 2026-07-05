@@ -1,0 +1,20 @@
+fields:
+  - field_id: google_finance_url
+    label: Google Finance Link
+    source_type: system
+    locators:
+      - kind: paragraph
+        paragraph_index: 10
+        expected_text: 可在该网页上抓取客户的链接
+    write_strategy: replace_with_hyperlink
+    output_format: url
+
+  - field_id: cninfo_company_url
+    label: CNINFO Company Link
+    source_type: cninfo
+    locators:
+      - kind: paragraph
+        paragraph_index: 12
+        expected_text: 可在该网页上抓取客户的链接
+    write_strategy: replace_with_hyperlink
+    output_format: url

@@ -1,0 +1,73 @@
+fields:
+  - field_id: us_subsidiary_status
+    label: US Subsidiaries
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 0, column_index: 1}]
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_text
+    output_format: text
+  - field_id: us_subsidiary_count
+    label: Number of US Subsidiaries
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 0, column_index: 3}]
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+  - field_id: us_exposure_other_details
+    label: Other US Exposure Details
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 1, column_index: 1}]
+        expected_empty: true
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: us_revenue
+    label: US Revenue
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 2, column_index: 1}]
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+  - field_id: us_revenue_ratio
+    label: Percent of Total Revenue
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 2, column_index: 3}]
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+  - field_id: us_subsidiary_details
+    label: Details of US Subsidiaries
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 3, column_index: 1}]
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: us_employee_count
+    label: US Employees
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 4, column_index: 1}]
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+  - field_id: us_employee_by_state
+    label: US Employees Split by State
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path: [{table_index: 2, row_index: 5, column_index: 1}]
+        expected_empty: true
+    write_strategy: replace_multiline_text
+    output_format: multiline

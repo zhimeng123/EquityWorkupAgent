@@ -1,0 +1,26 @@
+version: 1
+targets:
+  "000938":
+    company_name: 紫光股份
+    peers:
+      - company_name: 神州数码
+        stock_code: "000034"
+        exchange: 深圳证券交易所
+        eastmoney_secid: "0.000034"
+        eastmoney_secu_code: 000034.SZ
+        xueqiu_symbol: SZ000034
+        selection_rationale: 同属A股信息技术产业，主营IT分销与数字化服务，与紫光股份业务及收入结构具有可比性。
+      - company_name: 浪潮信息
+        stock_code: "000977"
+        exchange: 深圳证券交易所
+        eastmoney_secid: "0.000977"
+        eastmoney_secu_code: 000977.SZ
+        xueqiu_symbol: SZ000977
+        selection_rationale: 同属A股计算机硬件领域，服务器及算力基础设施业务与紫光股份ICT设备业务具有可比性。
+      - company_name: 中科曙光
+        stock_code: "603019"
+        exchange: 上海证券交易所
+        eastmoney_secid: "1.603019"
+        eastmoney_secu_code: 603019.SH
+        xueqiu_symbol: SH603019
+        selection_rationale: 同属A股计算机硬件与算力基础设施领域，其服务器和数据中心业务与紫光股份具有可比性。

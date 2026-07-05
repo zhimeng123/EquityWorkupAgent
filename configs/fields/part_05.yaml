@@ -1,0 +1,42 @@
+fields:
+  - field_id: related_party_transactions
+    label: Related Party Transactions
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 6
+            row_index: 0
+            column_index: 0
+        expected_text: 可在最新年报上抓取关联交易信息
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: peer_comparison_table
+    label: Peer Comparison Table
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 7
+            row_index: 1
+            column_index: 0
+          - table_index: 0
+            row_index: 1
+            column_index: 0
+        expected_text: Proposer
+    write_strategy: fill_fixed_table
+    output_format: table
+
+  - field_id: peer_alignment_comment
+    label: Peer Alignment Comment
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 7
+            row_index: 0
+            column_index: 1
+        expected_text: COMMENTS BY AI if no extra charge
+    write_strategy: replace_multiline_text
+    output_format: multiline

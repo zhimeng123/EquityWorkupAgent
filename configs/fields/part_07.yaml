@@ -1,0 +1,39 @@
+fields:
+  - field_id: receivables_vs_revenue_growth
+    label: Accounts Receivable Growth versus Revenue Growth
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 9
+            row_index: 0
+            column_index: 1
+        expected_text: 可在东方财富网上抓取最近两年信息并计算对比数据
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: receivable_impairment_analysis
+    label: Significant Receivable Write-down
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 9
+            row_index: 1
+            column_index: 1
+        expected_text: 可在巨潮网搜索最新年度计提资产减值披露，抽取坏账准备、信息减值、合同资产减值等信息，计算合计数、合计数在年度营收、应收账款的占比
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: intangibles_asset_analysis
+    label: Intangibles as a Percentage of Total Assets
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 9
+            row_index: 2
+            column_index: 1
+        expected_text: 可在东方财富网上抓取最新年报或季报的商誉和无形资产，计算两者之和再除以总资产所得的百分比数值
+    write_strategy: replace_text
+    output_format: text

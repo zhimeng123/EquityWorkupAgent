@@ -1,0 +1,187 @@
+template_version: Workup_template_260617-external-v1
+template_filename: Workup_template_260617-外测版.docx
+includes:
+  - fields/part_01.yaml
+  - fields/part_02.yaml
+  - fields/part_03.yaml
+  - fields/part_04.yaml
+  - fields/part_05.yaml
+  - fields/part_06.yaml
+  - fields/part_07.yaml
+  - fields/part_08.yaml
+  - fields/part_09.yaml
+  - fields/part_10.yaml
+  - fields/part_11.yaml
+fields:
+  - field_id: company_english_name
+    label: Company English Name
+    source_type: eastmoney
+    locator:
+      kind: header
+      header_type: default
+      paragraph_index: 1
+      expected_text: Unisplendour Corporation Limited
+    write_strategy: replace_text
+
+  - field_id: country_of_incorporation
+    label: Country of Incorp.
+    source_type: fixed
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 0
+      column_index: 1
+      expected_text: PRC
+    write_strategy: replace_text
+
+  - field_id: total_assets
+    label: Total Asset
+    source_type: eastmoney
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 1
+      column_index: 1
+      expected_text: 可在东方财富上抓取最近年度和季度的数据
+    write_strategy: replace_text
+
+  - field_id: total_equity
+    label: Total Equity
+    source_type: eastmoney
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 1
+      column_index: 3
+      expected_text: 可在东方财富上抓取最近年度和季度的数据
+    write_strategy: replace_text
+
+  - field_id: annual_revenue
+    label: Annual Revenue
+    source_type: eastmoney
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 2
+      column_index: 1
+      expected_text: 可在东方财富上抓取最近年度和季度YTD的数据
+    write_strategy: replace_text
+
+  - field_id: annual_net_profit
+    label: Annual Net Profit
+    source_type: eastmoney
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 2
+      column_index: 3
+      expected_text: 可在东方财富上抓取最近年度和季度YTD的数据
+    write_strategy: replace_text
+
+  - field_id: listing_status
+    label: Listing Status
+    source_type: fixed
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 3
+      column_index: 3
+      expected_text: Listed
+    write_strategy: replace_text
+
+  - field_id: listed_exchange
+    label: Listed Exchange
+    source_type: eastmoney
+    locator:
+      kind: table_cell
+      table_index: 1
+      row_index: 4
+      column_index: 1
+      expected_text: 可在东方财富上抓取
+    write_strategy: replace_text
+
+  - field_id: market_capitalization
+    label: Market Capitalization
+    source_type: market
+    locators:
+      - kind: table_cell
+        table_index: 1
+        row_index: 4
+        column_index: 3
+        expected_text: 可在雪球网上抓取
+      - kind: table_cell
+        table_index: 10
+        row_index: 0
+        column_index: 3
+        expected_text: 可在雪球网上抓取
+    write_strategy: replace_text
+
+  - field_id: official_website
+    label: Official website link
+    source_type: eastmoney
+    locator:
+      kind: paragraph
+      paragraph_index: 8
+      expected_text: 可在东方财富网上抓取
+    write_strategy: replace_with_hyperlink
+
+  - field_id: xueqiu_url
+    label: 雪球网链接
+    source_type: system
+    locator:
+      kind: paragraph
+      paragraph_index: 14
+      expected_text: 可在该网页上抓取客户的链接
+    write_strategy: replace_with_hyperlink
+
+  - field_id: eastmoney_url
+    label: 东方财富网链接
+    source_type: system
+    locator:
+      kind: paragraph
+      paragraph_index: 16
+      expected_text: 可在该网页上抓取客户的链接
+    write_strategy: replace_with_hyperlink
+
+  - field_id: business_description
+    label: Business Description
+    source_type: official_site
+    locator:
+      kind: paragraph
+      paragraph_index: 21
+      expected_text: 可在最新年报/半年报上抓取，含成立时间、上市时间、主要经营业务范围
+    write_strategy: replace_text
+    output_style: business_description
+
+  - field_id: current_price
+    label: Current Price
+    source_type: market
+    locator:
+      kind: table_cell
+      table_index: 10
+      row_index: 1
+      column_index: 1
+      expected_text: 可在雪球网上抓取
+    write_strategy: replace_text
+
+  - field_id: week_52_low
+    label: 52 Week Low
+    source_type: market
+    locator:
+      kind: table_cell
+      table_index: 10
+      row_index: 2
+      column_index: 1
+      expected_text: 可在雪球网上抓取
+    write_strategy: replace_text
+
+  - field_id: week_52_high
+    label: 52 Week High
+    source_type: market
+    locator:
+      kind: table_cell
+      table_index: 10
+      row_index: 2
+      column_index: 3
+      expected_text: 可在雪球网上抓取
+    write_strategy: replace_text

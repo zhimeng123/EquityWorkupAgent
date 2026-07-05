@@ -1,0 +1,62 @@
+fields:
+  - field_id: soe_classification
+    label: SOE / Non-SOE
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 1
+            row_index: 0
+            column_index: 3
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: listed_subsidiaries
+    label: Listed Subsidiaries
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 1
+            row_index: 5
+            column_index: 3
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: listed_outside_directorships
+    label: Listed Outside Directorships
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 1
+            row_index: 6
+            column_index: 3
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: major_ma_past_12m
+    label: Major M&A During the Past 12 Months
+    source_type: cninfo
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 1
+            row_index: 7
+            column_index: 0
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: ma_plan_next_12m
+    label: M&A Plan in the Next 12 Months
+    source_type: annual_report
+    locators:
+      - kind: paragraph
+        paragraph_index: 5
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline

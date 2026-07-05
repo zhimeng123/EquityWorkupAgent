@@ -1,0 +1,146 @@
+fields:
+  - field_id: key_executive_profiles
+    label: Key Executive Profiles
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 13
+            row_index: 1
+            column_index: 0
+        expected_text: 可在东方财富网上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: board_structure
+    label: Board Structure
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 14
+            row_index: 0
+            column_index: 0
+        expected_text: 可在最新年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: director_officer_changes
+    label: Director and Officer Changes
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 14
+            row_index: 1
+            column_index: 0
+        expected_text: 先在最新年报上抓取，后续在巨潮网上抓取年报后至今的公告
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: major_shareholders
+    label: Major Shareholders
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 15
+            row_index: 0
+            column_index: 0
+          - table_index: 0
+            row_index: 0
+            column_index: 0
+        expected_text: 在最新年报和半年报上抓取，保留股权变动、是否有质押等信息
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: major_shareholder_change_status
+    label: Major Shareholder Change Status
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 15
+            row_index: 1
+            column_index: 0
+        expected_text: "Has there been any major change in substantial shareholders in the past 12 months? "
+    write_strategy: append_after_label
+    output_format: text
+
+  - field_id: major_shareholder_change_details
+    label: Major Shareholder Change Details
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 15
+            row_index: 2
+            column_index: 1
+        expected_empty: true
+    write_strategy: replace_multiline_text
+    output_format: multiline
+
+  - field_id: employees_prc
+    label: Employees Within PRC
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 16
+            row_index: 1
+            column_index: 1
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: employees_us
+    label: Employees Within USA
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 16
+            row_index: 1
+            column_index: 2
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: employees_europe
+    label: Employees Within Europe
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 16
+            row_index: 1
+            column_index: 3
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: employees_other
+    label: Employees Rest of World
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 16
+            row_index: 1
+            column_index: 4
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: employees_total
+    label: Employees Total
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 16
+            row_index: 1
+            column_index: 5
+        expected_empty: true
+    write_strategy: replace_text
+    output_format: text

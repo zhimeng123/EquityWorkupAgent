@@ -1,0 +1,91 @@
+fields:
+  - field_id: auditor_profile
+    label: Auditor Profile
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 0, column_index: 1}], expected_text: 可在最新年报上抓取信息}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: audit_opinion
+    label: Audit Opinion
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 1, column_index: 1}], expected_text: 可在最新年报上抓取信息}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: qualified_opinion_details
+    label: Qualified Opinion Details
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 2, column_index: 1}], expected_text: 可在最新年报上抓取信息}]
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: auditor_change_status
+    label: Auditor Change Status
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 3, column_index: 1}], expected_text: 可在最新年报上抓取信息，并查看巨潮网上年报后的公告}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: auditor_change_details
+    label: Auditor Change Details
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 4, column_index: 1}], expected_empty: true}]
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: financial_restatement_status
+    label: Financial Restatement Status
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 5, column_index: 1}], expected_text: 可在最近两年的年报上抓取信息，并查看巨潮网上年报后的公告有无会计更正的公告}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: financial_restatement_details
+    label: Financial Restatement Details
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 17, row_index: 6, column_index: 1}], expected_empty: true}]
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: board_officer_material_change
+    label: Board or Officer Material Change
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 18, row_index: 0, column_index: 1}], expected_text: 可在最新年报上抓取信息，并查看巨潮网上年报后的公告}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: business_operation_material_change
+    label: Business Operation Material Change
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 18, row_index: 1, column_index: 1}], expected_text: 可在最新年报和半年报上抓取信息}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: top3_shareholder_change
+    label: Top Three Shareholder Change
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 18, row_index: 2, column_index: 1}], expected_text: 可在最近两年报和最新半年报上抓取信息对比}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: nonfinancial_change_details
+    label: Non-financial Material Change Details
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 18, row_index: 3, column_index: 1}], expected_empty: true}]
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: litigation_status
+    label: Litigation Status
+    source_type: annual_report
+    locators: [{kind: table_cell, table_path: [{table_index: 19, row_index: 0, column_index: 2}], expected_empty: true}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: regulatory_status
+    label: Regulatory Status
+    source_type: exchange
+    locators: [{kind: table_cell, table_path: [{table_index: 19, row_index: 1, column_index: 2}], expected_empty: true}]
+    write_strategy: replace_text
+    output_format: text
+  - field_id: litigation_regulatory_details
+    label: Litigation and Regulatory Details
+    source_type: cninfo
+    locators: [{kind: table_cell, table_path: [{table_index: 19, row_index: 2, column_index: 1}], expected_empty: true}]
+    write_strategy: replace_multiline_text
+    output_format: multiline
+  - field_id: negative_news_summary
+    label: Negative News Summary
+    source_type: news
+    locators: [{kind: table_cell, table_path: [{table_index: 20, row_index: 0, column_index: 0}], expected_empty: true}]
+    write_strategy: replace_multiline_text
+    output_format: multiline

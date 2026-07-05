@@ -1,0 +1,78 @@
+fields:
+  - field_id: ipo_date
+    label: IPO Date
+    source_type: annual_report
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 10
+            row_index: 0
+            column_index: 1
+        expected_text: 可最新年报或半年报（选最新者）上抓取
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: align_to_index
+    label: Align to Index
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 10
+            row_index: 3
+            column_index: 1
+        expected_text: Comments if no extra charge
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: align_to_peers
+    label: Align to Peers
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 10
+            row_index: 3
+            column_index: 3
+        expected_text: Comments if no extra charge
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: significant_stock_drop
+    label: Significant Stock Drop in the Past 24 Months
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 11
+            row_index: 0
+            column_index: 2
+        expected_text: 可在雪球网上取股价趋势图
+    write_strategy: replace_text
+    output_format: text
+
+  - field_id: significant_stock_drop_details
+    label: Significant Stock Drop Details
+    source_type: derived
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 11
+            row_index: 1
+            column_index: 2
+        expected_text: "If yes to the above, please provide full detail:"
+    write_strategy: append_after_label
+    output_format: text
+
+  - field_id: securities_offerings
+    label: Securities Offerings in the Past 12 Months
+    source_type: cninfo
+    locators:
+      - kind: table_cell
+        table_path:
+          - table_index: 11
+            row_index: 2
+            column_index: 2
+        expected_text: 可在最新年报和半年报上抓取
+    write_strategy: replace_multiline_text
+    output_format: multiline

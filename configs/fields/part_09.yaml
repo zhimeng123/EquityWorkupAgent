@@ -1,0 +1,19 @@
+fields:
+  - field_id: standalone_stock_chart
+    label: Standalone Stock Chart
+    source_type: market_history
+    locators:
+      - kind: paragraph
+        paragraph_index: 44
+        expected_text: 可在雪球网上抓取股价走势图
+    write_strategy: insert_image
+    output_format: image
+  - field_id: peer_comparison_chart
+    label: Peer Comparison Stock Chart
+    source_type: market_history
+    locators:
+      - kind: image_anchor
+        table_path: [{table_index: 12, row_index: 0, column_index: 0}]
+        expected_text: Peers的选取标准同上，可以按其年度营业收入相近的选取3家
+    write_strategy: insert_image
+    output_format: image
