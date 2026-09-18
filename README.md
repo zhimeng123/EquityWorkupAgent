@@ -86,8 +86,11 @@ cp .env.example .env
 
 ```dotenv
 DEEPSEEK_API_KEY=
+LLM_BASE_URL=https://tokenrhythm.studio/v1
+LLM_MODEL=qwen3.8-flash
 ```
 
+`DEEPSEEK_API_KEY` 是历史变量名，当前作为通用 LLM API Key 使用。
 `.env` 仅用于本地运行，不应提交到版本控制。
 
 ## 运行

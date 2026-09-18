@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import json
 from datetime import datetime, timezone
@@ -30,7 +29,7 @@ from mlc_agent.exceptions import InputValidationError, WorkupAgentError
 from mlc_agent.field_merger import build_static_values, merge_field_values
 from mlc_agent.http_client import build_http_client
 from mlc_agent.json_io import save_json
-from mlc_agent.llm import summarize_business_description
+from mlc_agent.llm import API_KEY_ENV, get_llm_api_key, summarize_business_description
 from mlc_agent.logging_utils import configure_run_logger, get_logger
 from mlc_agent.official_site import fetch_official_profile
 from mlc_agent.schemas import (
@@ -292,10 +291,11 @@ def fetch_official_site_node(state: WorkupAgentState) -> dict[str, Any]:
             errors = _append_error({**state, "errors": errors}, "fetch_official_site", str(exc))
 
     if source_text:
-        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-        if not api_key:
+        try:
+            api_key = get_llm_api_key()
+        except ValueError:
             errors = _append_error(
-                {**state, "errors": errors}, "summarize_business_description", "DEEPSEEK_API_KEY is not set"
+                {**state, "errors": errors}, "summarize_business_description", f"{API_KEY_ENV} is not set"
             )
         else:
             try:

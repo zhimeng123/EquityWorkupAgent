@@ -1,11 +1,41 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from openai import OpenAI
 
 
-MODEL = "deepseek-v4-flash"
-BASE_URL = "https://api.deepseek.com"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+API_KEY_ENV = "DEEPSEEK_API_KEY"
+BASE_URL_ENV = "LLM_BASE_URL"
+MODEL_ENV = "LLM_MODEL"
 MAX_DESCRIPTION_WORDS = 30
+
+
+def _load_env() -> None:
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+def _required_setting(name: str) -> str:
+    _load_env()
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ValueError(f"{name} is not set")
+    return value
+
+
+def get_llm_api_key() -> str:
+    return _required_setting(API_KEY_ENV)
+
+
+def get_llm_base_url() -> str:
+    return _required_setting(BASE_URL_ENV)
+
+
+def get_llm_model() -> str:
+    return _required_setting(MODEL_ENV)
 
 
 def _limit_words(text: str, maximum: int) -> str:
@@ -25,7 +55,7 @@ def summarize_business_description(
     listing_date: str | None,
     main_business: str | None,
 ) -> str:
-    client = OpenAI(api_key=api_key, base_url=BASE_URL, timeout=30.0)
+    client = OpenAI(api_key=api_key, base_url=get_llm_base_url(), timeout=30.0)
     facts = (
         f"Company: {company_name}\n"
         f"Founded date: {founded_date or 'not provided'}\n"
@@ -33,7 +63,7 @@ def summarize_business_description(
         f"Main business: {main_business or 'not provided'}"
     )
     response = client.chat.completions.create(
-        model=MODEL,
+        model=get_llm_model(),
         messages=[
             {
                 "role": "system",
@@ -50,5 +80,5 @@ def summarize_business_description(
     )
     content = response.choices[0].message.content
     if not content or not content.strip():
-        raise ValueError("DeepSeek returned an empty business description.")
+        raise ValueError("LLM returned an empty business description.")
     return _limit_words(content, MAX_DESCRIPTION_WORDS)

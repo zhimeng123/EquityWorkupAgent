@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -17,7 +16,7 @@ from mlc_agent.company_supplement import (
     collect_company_supplement,
 )
 from mlc_agent.cninfo import AnnouncementDocument
-from mlc_agent.llm import BASE_URL, MODEL
+from mlc_agent.llm import get_llm_api_key, get_llm_base_url, get_llm_model
 from mlc_agent.operating_performance import ReportDocument, extract_revenue_breakdown
 from mlc_agent.production_adapters import (
     ParsedDisclosure,
@@ -149,9 +148,10 @@ def validate_parsed_annual_report(
     report_year: int,
     published_at: datetime,
     as_of: date,
-    model: str = MODEL,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Validate only annual-report-backed MVP fields; performs no HTTP data retrieval."""
+    model = model or get_llm_model()
     bundle = build_local_annual_bundle(
         parsed,
         stock_code=stock_code,
@@ -300,11 +300,9 @@ def run_annual_report_validation(
     if not pdf_path.is_file():
         raise ValueError(f"local annual report does not exist: {pdf_path}")
     load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is not set")
+    api_key = get_llm_api_key()
     parsed = parse_machine_generated_pdf(pdf_path)
-    client = OpenAI(api_key=api_key, base_url=BASE_URL, timeout=60.0)
+    client = OpenAI(api_key=api_key, base_url=get_llm_base_url(), timeout=60.0)
     result = validate_parsed_annual_report(
         parsed,
         client=client,

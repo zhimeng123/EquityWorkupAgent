@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-import os
 from pathlib import Path
 import re
 from typing import Any, Callable
@@ -21,7 +20,7 @@ from mlc_agent.external_links import build_cninfo_company_url, collect_external_
 from mlc_agent.financial_metrics import collect_financial_metrics
 from mlc_agent.governance import GovernanceReportInput, collect_governance
 from mlc_agent.http_client import build_http_client
-from mlc_agent.llm import BASE_URL, MODEL
+from mlc_agent.llm import get_llm_api_key, get_llm_base_url, get_llm_model
 from mlc_agent.operating_performance import (
     FinancialPeriodRecord,
     OutlookRiskItem,
@@ -98,10 +97,7 @@ def _as_of(state: WorkupAgentState) -> date:
 
 
 def _llm_client() -> OpenAI:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is not set")
-    return OpenAI(api_key=api_key, base_url=BASE_URL, timeout=60.0)
+    return OpenAI(api_key=get_llm_api_key(), base_url=get_llm_base_url(), timeout=60.0)
 
 
 def _bundle(state: WorkupAgentState) -> SharedDisclosureBundle:
@@ -210,7 +206,7 @@ def part01_node(state: WorkupAgentState) -> dict[str, Any]:
         result = collect_company_supplement(
             documents,
             as_of=_as_of(state),
-            extractor=make_part01_extractor(_llm_client(), model=MODEL),
+            extractor=make_part01_extractor(_llm_client(), model=get_llm_model()),
         )
         return _append_result(
             state,
@@ -258,7 +254,7 @@ def part03_node(state: WorkupAgentState) -> dict[str, Any]:
         result = collect_us_exposure(
             documents,
             as_of=_as_of(state),
-            extractor=make_part03_extractor(_llm_client(), model=MODEL),
+            extractor=make_part03_extractor(_llm_client(), model=get_llm_model()),
         )
         return _append_result(
             state,
@@ -274,7 +270,7 @@ def part03_node(state: WorkupAgentState) -> dict[str, Any]:
 def _outlook_renderer(client: OpenAI) -> Callable[[tuple[OutlookRiskItem, ...]], str]:
     def render(items: tuple[OutlookRiskItem, ...]) -> str:
         response = client.chat.completions.create(
-            model=MODEL,
+            model=get_llm_model(),
             messages=[{"role": "user", "content": build_outlook_english_prompt(items)}],
             temperature=0,
         )
@@ -355,7 +351,7 @@ def part05_node(state: WorkupAgentState) -> dict[str, Any]:
     try:
         related_transactions = extract_part05_related_party_transactions(
             _llm_client(),
-            model=MODEL,
+            model=get_llm_model(),
             bundle=bundle,
         )
         related_value = collect_related_party_transactions(
@@ -386,7 +382,7 @@ def part06_node(state: WorkupAgentState) -> dict[str, Any]:
         bundle = _bundle(state)
         operating = state.get("part_results", {}).get("part_04", {})
         extraction = extract_pydantic(
-            _llm_client(), model=MODEL, output_model=Part06Extraction,
+            _llm_client(), model=get_llm_model(), output_model=Part06Extraction,
             system_prompt=(
                 "Extract the two complete annual liquidity records and latest balance-sheet debt inputs using "
                 "the exact requested statement line items. Every MetricInput.period for an annual record MUST "
@@ -447,7 +443,7 @@ def part07_node(state: WorkupAgentState) -> dict[str, Any]:
             latest_per_type=True,
         )
         extraction = extract_pydantic(
-            _llm_client(), model=MODEL, output_model=Part07Extraction,
+            _llm_client(), model=get_llm_model(), output_model=Part07Extraction,
             system_prompt="Extract the latest annual balance-sheet details and only eligible receivable/contract-asset impairment components.",
             payload={
                 "annual_records": operating.get("annual_records", []),
@@ -458,7 +454,7 @@ def part07_node(state: WorkupAgentState) -> dict[str, Any]:
         receivables_error = None
         try:
             receivables = extract_pydantic(
-                _llm_client(), model=MODEL, output_model=Part07ReceivablesExtraction,
+                _llm_client(), model=get_llm_model(), output_model=Part07ReceivablesExtraction,
                 system_prompt=(
                     "Extract exactly the latest two consecutive fiscal-year accounts-receivable carrying amounts. "
                     "Use the current and comparative columns in the latest annual report; both records must use the "
@@ -497,7 +493,7 @@ def part08_node(state: WorkupAgentState) -> dict[str, Any]:
         if len(peer_identities) != 3:
             raise ValueError("Part 05 did not provide exactly three selected peer identities")
         extraction = extract_pydantic(
-            _llm_client(), model=MODEL, output_model=Part08Extraction,
+            _llm_client(), model=get_llm_model(), output_model=Part08Extraction,
             system_prompt="Extract IPO evidence and every securities offering in the exact rolling 12-month announcement window.",
             payload={
                 "as_of": _as_of(state),
@@ -561,7 +557,7 @@ def part10_node(state: WorkupAgentState) -> dict[str, Any]:
         client = _llm_client()
         base = {"as_of": _as_of(state), "captured_at": state["created_at"]}
         core = extract_pydantic(
-            client, model=MODEL, output_model=Part10CoreExtraction,
+            client, model=get_llm_model(), output_model=Part10CoreExtraction,
             system_prompt="Extract report metadata, current people and roles, board structure, and employees only.",
             payload={**base, "documents": filtered_disclosure_payload(
                 bundle, document_types={"annual_report"}, page_pattern=_PART10_CORE_PAGES,
@@ -569,7 +565,7 @@ def part10_node(state: WorkupAgentState) -> dict[str, Any]:
             )},
         )
         shareholders = extract_pydantic(
-            client, model=MODEL, output_model=Part10ShareholdersExtraction,
+            client, model=get_llm_model(), output_model=Part10ShareholdersExtraction,
             system_prompt=(
                 "Extract current and prior shareholder snapshots only. Every nested shareholder.report_period "
                 "must equal its snapshot report_period. The current snapshot must use the supplied annual report period."
@@ -580,7 +576,7 @@ def part10_node(state: WorkupAgentState) -> dict[str, Any]:
             )},
         )
         changes = extract_pydantic(
-            client, model=MODEL, output_model=Part10ChangesExtraction,
+            client, model=get_llm_model(), output_model=Part10ChangesExtraction,
             system_prompt="Extract controller status and explicitly disclosed post-report governance/shareholder changes only.",
             payload={**base, "documents": filtered_disclosure_payload(
                 bundle, document_types={"annual_report"}, page_pattern=_PART10_CHANGE_PAGES,
@@ -649,7 +645,7 @@ def part11_node(state: WorkupAgentState) -> dict[str, Any]:
         for group, output_model, prompt, group_payload in calls:
             try:
                 extracted[group] = extract_pydantic(
-                    client, model=MODEL, output_model=output_model,
+                    client, model=get_llm_model(), output_model=output_model,
                     system_prompt=prompt,
                     payload={"as_of": _as_of(state), **group_payload},
                 )
