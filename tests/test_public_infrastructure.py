@@ -678,7 +678,7 @@ def test_self_check_accepts_historical_multiline_false_positive_fields(tmp_path)
     assert checked["self_check_result"]["passed"] is False
     assert checked["self_check_result"]["checks"]["written_values_match_mapping"] is True
     assert checked["self_check_result"]["checks"]["failed_targets_preserved"] is True
-    assert checked["self_check_result"]["checks"]["all_95_configured_fields_succeeded"] is False
+    assert checked["self_check_result"]["checks"]["all_fields_succeeded"] is False
 
 
 def test_self_check_checks_multiline_value_at_every_locator(tmp_path):
@@ -706,7 +706,7 @@ def test_self_check_checks_multiline_value_at_every_locator(tmp_path):
     checked = self_check_node(state)
     assert checked["self_check_result"]["passed"] is False
     assert checked["self_check_result"]["checks"]["written_values_match_mapping"] is True
-    assert checked["self_check_result"]["checks"]["all_95_configured_fields_succeeded"] is False
+    assert checked["self_check_result"]["checks"]["all_fields_succeeded"] is False
 
 
 def test_self_check_reports_corrupt_docx_without_raising(tmp_path):

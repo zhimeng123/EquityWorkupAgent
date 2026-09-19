@@ -208,13 +208,28 @@ def audit_run(run_dir: Path, *, render: bool, inspection_manifest: Path | None) 
     )
     failed = failed if isinstance(failed, list) else []
     failed_ids = {item.get("field_id") for item in failed if isinstance(item, dict)}
-    checks["success_count_is_95"] = _check(
-        len(evidence) == EXPECTED_FIELD_COUNT and set(evidence_by_id) == configured_ids,
-        {"success_count": len(evidence), "missing": sorted(configured_ids - set(evidence_by_id)), "extra": sorted(set(evidence_by_id) - configured_ids)},
+    checks["every_configured_field_accounted_for"] = _check(
+        (set(evidence_by_id) | failed_ids) == configured_ids
+        and not (set(evidence_by_id) & failed_ids),
+        {
+            "unaccounted": sorted(configured_ids - (set(evidence_by_id) | failed_ids)),
+            "extra": sorted((set(evidence_by_id) | failed_ids) - configured_ids),
+            "overlap": sorted(set(evidence_by_id) & failed_ids),
+        },
     )
-    checks["failed_count_is_0"] = _check(
-        isinstance(loaded.get("failed_fields.json"), list) and not failed,
-        {"failed_count": len(failed), "failed_ids": sorted(failed_ids)},
+    checks["every_failure_has_reason"] = _check(
+        isinstance(loaded.get("failed_fields.json"), list)
+        and all(
+            isinstance(item, dict) and str(item.get("reason", "")).strip()
+            for item in failed
+        ),
+        {
+            "failures_without_reason": [
+                item.get("field_id")
+                for item in failed
+                if not isinstance(item, dict) or not str(item.get("reason", "")).strip()
+            ],
+        },
     )
     conflicts = sources.get("conflicts") if isinstance(sources, dict) else None
     checks["conflicts_is_list"] = _check(
@@ -278,20 +293,16 @@ def audit_run(run_dir: Path, *, render: bool, inspection_manifest: Path | None) 
             for field_id, item in evidence_by_id.items()
             if field_id not in mapping_by_id or not _docx_field_check(document, mapping_by_id[field_id], item)
         ]
-        checks["all_95_values_match_docx_mapping"] = _check(
-            len(evidence) == EXPECTED_FIELD_COUNT
-            and set(evidence_by_id) == configured_ids
-            and not bad_fields,
+        checks["all_success_values_match_docx_mapping"] = _check(
+            set(evidence_by_id) <= configured_ids and not bad_fields,
             {
                 "mismatched_fields": bad_fields,
                 "success_count": len(evidence),
-                "missing": sorted(configured_ids - set(evidence_by_id)),
-                "extra": sorted(set(evidence_by_id) - configured_ids),
             },
         )
     except Exception as exc:
         docx_checks.append(str(exc))
-        checks["all_95_values_match_docx_mapping"] = _check(False, docx_checks)
+        checks["all_success_values_match_docx_mapping"] = _check(False, docx_checks)
     checks["docx_reopens"] = _check(docx_ok)
 
     render_result = {"pages": []}

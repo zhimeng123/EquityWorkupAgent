@@ -27,11 +27,57 @@ def test_audit_rejects_partial_run_and_requires_render_inspection(tmp_path, monk
     report = audit_run(tmp_path, render=False, inspection_manifest=None)
 
     assert report["status"] == "FAIL"
-    assert report["checks"]["success_count_is_95"]["passed"] is False
-    assert report["checks"]["failed_count_is_0"]["passed"] is False
-    assert report["checks"]["all_95_values_match_docx_mapping"]["passed"] is False
+    assert report["checks"]["every_configured_field_accounted_for"]["passed"] is False
+    assert report["checks"]["every_failure_has_reason"]["passed"] is True
+    assert report["checks"]["all_success_values_match_docx_mapping"]["passed"] is False
     assert report["checks"]["visual_inspection"]["passed"] is False
     assert (tmp_path / "acceptance_report.json").exists()
+
+
+def test_audit_accepts_fully_accounted_partial_run(tmp_path, monkeypatch):
+    mappings = [{"field_id": f"field_{index}", "write_strategy": "replace_text", "locators": []} for index in range(95)]
+    monkeypatch.setattr(
+        "scripts.audit_full_acceptance.load_template_mapping",
+        lambda _config_dir: {"fields": mappings},
+    )
+    (tmp_path / "result.docx").write_bytes(b"not a docx")
+    evidence = [
+        {"field_id": "field_0", "value": "value 0", "normalized_value": "value 0", "source_url": "https://example.test/0"},
+        {"field_id": "field_1", "value": "value 1", "normalized_value": "value 1", "source_url": "https://example.test/1"},
+    ]
+    _copy_json(tmp_path / "sources.json", {"evidence": evidence, "conflicts": []})
+    _copy_json(
+        tmp_path / "failed_fields.json",
+        [{"field_id": f"field_{index}", "reason": "no verified source"} for index in range(2, 95)],
+    )
+    _copy_json(tmp_path / "extracted_data.json", {"run": {}, "company": {}, "node_errors": []})
+    _copy_json(tmp_path / "execution_plan.json", [])
+
+    report = audit_run(tmp_path, render=False, inspection_manifest=None)
+
+    assert report["checks"]["every_configured_field_accounted_for"]["passed"] is True
+    assert report["checks"]["every_failure_has_reason"]["passed"] is True
+    assert report["checks"]["docx_reopens"]["passed"] is False
+    assert report["status"] == "FAIL"
+
+
+def test_audit_rejects_reasonless_failure_and_overlap(tmp_path, monkeypatch):
+    mappings = [{"field_id": f"field_{index}", "write_strategy": "replace_text", "locators": []} for index in range(95)]
+    monkeypatch.setattr(
+        "scripts.audit_full_acceptance.load_template_mapping",
+        lambda _config_dir: {"fields": mappings},
+    )
+    (tmp_path / "result.docx").write_bytes(b"not a docx")
+    evidence = [{"field_id": "field_0", "value": "v", "normalized_value": "v", "source_url": "https://example.test/0"}]
+    _copy_json(tmp_path / "sources.json", {"evidence": evidence, "conflicts": []})
+    _copy_json(tmp_path / "failed_fields.json", [{"field_id": "field_0", "reason": ""}])
+    _copy_json(tmp_path / "extracted_data.json", {"run": {}, "company": {}, "node_errors": []})
+    _copy_json(tmp_path / "execution_plan.json", [])
+
+    report = audit_run(tmp_path, render=False, inspection_manifest=None)
+
+    assert report["checks"]["every_configured_field_accounted_for"]["passed"] is False
+    assert report["checks"]["every_failure_has_reason"]["passed"] is False
 
 
 def test_audit_rejects_wrong_persisted_artifact_container_types(tmp_path, monkeypatch):

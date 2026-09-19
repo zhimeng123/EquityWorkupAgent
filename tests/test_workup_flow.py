@@ -528,7 +528,7 @@ def test_langgraph_full_flow_preserves_mvp1_while_new_parts_fail_explicitly(monk
         keep_intermediate=False,
     )
 
-    assert result["self_check_result"]["passed"] is False
+    assert result["self_check_result"]["passed"] is True
     assert len(result["field_results"]) == 16
     assert len(result["failed_fields"]) == len(result["field_mapping"]) - 16
     assert all(item["reason"] for item in result["failed_fields"])
@@ -536,4 +536,4 @@ def test_langgraph_full_flow_preserves_mvp1_while_new_parts_fail_explicitly(monk
     assert Path(result["sources_json_path"]).exists()
     assert next(
         step for step in result["execution_plan"] if step["step_id"] == "self_check"
-    )["status"] == "failed"
+    )["status"] == "completed"

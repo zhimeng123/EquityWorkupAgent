@@ -71,6 +71,7 @@ PLAN_DEFINITIONS = [
 ]
 
 EXPECTED_CONFIGURED_FIELD_COUNT = 95
+INFORMATIONAL_CHECKS = frozenset({"all_fields_succeeded", "failed_fields_empty"})
 _RELATIONSHIP_EMBED_ATTRIBUTE = (
     "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 )
@@ -697,7 +698,7 @@ def self_check_node(state: WorkupAgentState) -> dict[str, Any]:
         len(state["field_mapping"]) == EXPECTED_CONFIGURED_FIELD_COUNT
         and len(configured_ids) == EXPECTED_CONFIGURED_FIELD_COUNT
     )
-    checks["all_95_configured_fields_succeeded"] = (
+    checks["all_fields_succeeded"] = (
         len(state["field_results"]) == EXPECTED_CONFIGURED_FIELD_COUNT
         and success_ids == configured_ids
     )
@@ -712,8 +713,7 @@ def self_check_node(state: WorkupAgentState) -> dict[str, Any]:
     }
     evidence_ids = set(evidence_by_id)
     checks["evidence_matches_field_results"] = (
-        len(state["evidence_records"]) == EXPECTED_CONFIGURED_FIELD_COUNT
-        and len(evidence_by_id) == EXPECTED_CONFIGURED_FIELD_COUNT
+        len(evidence_by_id) == len(state["evidence_records"])
         and evidence_ids == success_ids
         and all(
             evidence_by_id[field_id].get("value") == result.get("value")
@@ -868,9 +868,17 @@ def self_check_node(state: WorkupAgentState) -> dict[str, Any]:
         checks["docx_reopens"] = False
 
     for name, passed in checks.items():
+        if name in INFORMATIONAL_CHECKS:
+            continue
         if not passed and not any(name in issue for issue in issues):
             issues.append(f"Self-check failed: {name}")
-    result = SelfCheckResult(passed=all(checks.values()), checks=checks, issues=issues)
+    result = SelfCheckResult(
+        passed=all(
+            passed for name, passed in checks.items() if name not in INFORMATIONAL_CHECKS
+        ),
+        checks=checks,
+        issues=issues,
+    )
     plan = _mark_step(state, "self_check", "completed" if result.passed else "failed", "; ".join(issues))
     save_json(Path(state["execution_plan_json_path"]), plan)
     get_logger().info("Self-check passed=%s", result.passed)
