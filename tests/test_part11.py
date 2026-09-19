@@ -166,12 +166,15 @@ def test_no_requires_explicit_negative_quotation(documents, tmp_path):
     data = base_input(documents)
     negative = data.restatements.negative_evidence
     assert negative is not None
-    negative.evidence_text = "公司披露会计政策和会计估计。"
+    negative.evidence_text = "非四大会计师事务所背景为全国性证券审计机构。"
     result = collect_part11(
         data, company_name="测试公司", as_of=AS_OF, captured_at=CAPTURED, artifact_dir=tmp_path
     )
     assert {error.field_id for error in result.errors} == {
         "financial_restatement_status", "financial_restatement_details"
+    }
+    assert {error.reason for error in result.errors} == {
+        "Negative restatement quotation is not explicit."
     }
     assert not any(
         value.field_id in {"financial_restatement_status", "financial_restatement_details"}
@@ -404,7 +407,7 @@ def test_restatement_weak_negative_quote_fails_only_its_two_fields():
     weak = FactEvidence(
         source="annual_report", source_url=ANNUAL,
         disclosure_date=date(2026, 4, 20), period="FY2025",
-        evidence_text="报告说明公司财务信息正常。",  # 不含 不存在/未发生/无重大 等明确否定词
+        evidence_text="非四大会计师事务所背景为全国性证券审计机构。",  # 存在于 LATEST_TEXT，且不含明确否定词
         page_number=1,
     )
     extraction = Part11RestatementExtraction(
@@ -417,4 +420,7 @@ def test_restatement_weak_negative_quote_fails_only_its_two_fields():
     )
     assert {error.field_id for error in result.errors} == {
         "financial_restatement_status", "financial_restatement_details"
+    }
+    assert {error.reason for error in result.errors} == {
+        "Negative restatement quotation is not explicit."
     }
