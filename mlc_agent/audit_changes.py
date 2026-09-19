@@ -119,12 +119,6 @@ class RestatementDisclosure(BaseModel):
             raise ValueError("yes restatement status requires events")
         if self.status == "no" and (self.events or self.negative_evidence is None):
             raise ValueError("No restatement status requires explicit negative evidence")
-        if (
-            self.status == "no"
-            and self.negative_evidence is not None
-            and not has_explicit_negative_statement(self.negative_evidence.evidence_text)
-        ):
-            raise ValueError("No restatement status requires an explicitly negative quotation")
         if self.status == "not_disclosed" and (
             self.events or self.negative_evidence is not None or self.coverage_evidence is None
         ):
@@ -388,17 +382,23 @@ def collect_part11(
         else:
             evidence = events[0].evidence if events else restatement.negative_evidence
             assert evidence is not None
-            detail = "\n".join(
-                f"{item.event_date.isoformat()} | {item.periods_affected} | {item.details}" for item in events
-            ) or "Not applicable"
-            attempt("financial_restatement_status", lambda: _value(
-                "financial_restatement_status", "Yes" if events else "No", evidence,
-                data.documents, captured_at, restatement.model_dump(mode="json")
-            ))
-            attempt("financial_restatement_details", lambda: _value(
-                "financial_restatement_details", detail, evidence, data.documents, captured_at,
-                restatement.model_dump(mode="json"), items=_fact_items(events, data.documents)
-            ))
+            if restatement.status == "no" and not has_explicit_negative_statement(evidence.evidence_text):
+                errors.extend([
+                    Part11Error(field_id="financial_restatement_status", reason="Negative restatement quotation is not explicit."),
+                    Part11Error(field_id="financial_restatement_details", reason="Negative restatement quotation is not explicit."),
+                ])
+            else:
+                detail = "\n".join(
+                    f"{item.event_date.isoformat()} | {item.periods_affected} | {item.details}" for item in events
+                ) or "Not applicable"
+                attempt("financial_restatement_status", lambda: _value(
+                    "financial_restatement_status", "Yes" if events else "No", evidence,
+                    data.documents, captured_at, restatement.model_dump(mode="json")
+                ))
+                attempt("financial_restatement_details", lambda: _value(
+                    "financial_restatement_details", detail, evidence, data.documents, captured_at,
+                    restatement.model_dump(mode="json"), items=_fact_items(events, data.documents)
+                ))
 
     material_sections = (
         ("board_officer_material_change", "board_officer", data.board_officer_changes),
@@ -722,17 +722,23 @@ def collect_part11_groups(
             else:
                 evidence = events[0].evidence if events else restatement.negative_evidence
                 assert evidence is not None
-                detail = "\n".join(
-                    f"{item.event_date.isoformat()} | {item.periods_affected} | {item.details}" for item in events
-                ) or "Not applicable"
-                attempt("financial_restatement_status", lambda: _value(
-                    "financial_restatement_status", "Yes" if events else "No", evidence,
-                    documents, captured_at, restatement.model_dump(mode="json")
-                ))
-                attempt("financial_restatement_details", lambda: _value(
-                    "financial_restatement_details", detail, evidence, documents, captured_at,
-                    restatement.model_dump(mode="json"), items=_fact_items(events, documents)
-                ))
+                if restatement.status == "no" and not has_explicit_negative_statement(evidence.evidence_text):
+                    errors.extend([
+                        Part11Error(field_id="financial_restatement_status", reason="Negative restatement quotation is not explicit."),
+                        Part11Error(field_id="financial_restatement_details", reason="Negative restatement quotation is not explicit."),
+                    ])
+                else:
+                    detail = "\n".join(
+                        f"{item.event_date.isoformat()} | {item.periods_affected} | {item.details}" for item in events
+                    ) or "Not applicable"
+                    attempt("financial_restatement_status", lambda: _value(
+                        "financial_restatement_status", "Yes" if events else "No", evidence,
+                        documents, captured_at, restatement.model_dump(mode="json")
+                    ))
+                    attempt("financial_restatement_details", lambda: _value(
+                        "financial_restatement_details", detail, evidence, documents, captured_at,
+                        restatement.model_dump(mode="json"), items=_fact_items(events, documents)
+                    ))
 
     material_groups = {
         "board_changes": ("board_officer_material_change", "board_officer", "board_officer_changes"),

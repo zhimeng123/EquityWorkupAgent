@@ -15,6 +15,7 @@ from mlc_agent.audit_changes import (
     MaterialChangeDisclosure,
     MaterialChangeEvent,
     Part11Input,
+    RestatementDisclosure,
     collect_part11,
     collect_part11_groups,
     identify_big4,
@@ -22,7 +23,10 @@ from mlc_agent.audit_changes import (
 from mlc_agent.config import load_template_mapping
 from mlc_agent.docx_writer import validate_template_mapping
 from mlc_agent.news import NewsArticle, select_and_deduplicate_news
-from mlc_agent.production_adapters import Part11BoardChangesExtraction
+from mlc_agent.production_adapters import (
+    Part11BoardChangesExtraction,
+    Part11RestatementExtraction,
+)
 
 
 AS_OF = date(2026, 7, 3)
@@ -158,11 +162,21 @@ def test_audit_profiles_and_modified_opinion_validation(documents, tmp_path):
         })
 
 
-def test_no_requires_explicit_negative_quotation(documents):
-    raw = base_input(documents).model_dump(mode="json")
-    raw["restatements"]["negative_evidence"]["evidence_text"] = "公司披露会计政策和会计估计。"
-    with pytest.raises(ValueError, match="explicitly negative quotation"):
-        Part11Input.model_validate(raw)
+def test_no_requires_explicit_negative_quotation(documents, tmp_path):
+    data = base_input(documents)
+    negative = data.restatements.negative_evidence
+    assert negative is not None
+    negative.evidence_text = "公司披露会计政策和会计估计。"
+    result = collect_part11(
+        data, company_name="测试公司", as_of=AS_OF, captured_at=CAPTURED, artifact_dir=tmp_path
+    )
+    assert {error.field_id for error in result.errors} == {
+        "financial_restatement_status", "financial_restatement_details"
+    }
+    assert not any(
+        value.field_id in {"financial_restatement_status", "financial_restatement_details"}
+        for value in result.source_values
+    )
 
 
 def test_regulatory_no_requires_explicit_negative_quotation(documents):
@@ -379,3 +393,28 @@ def test_collect_part11_groups_accepts_plain_dict_documents():
     )
     assert any(value.field_id == "board_officer_material_change" for value in result.source_values)
     assert not any(error.field_id == "board_officer_material_change" for error in result.errors)
+
+
+def test_restatement_weak_negative_quote_fails_only_its_two_fields():
+    document = {
+        "source": "annual_report", "source_url": ANNUAL,
+        "disclosure_date": "2026-04-20", "period": "FY2025",
+        "text": LATEST_TEXT, "pages": [],
+    }
+    weak = FactEvidence(
+        source="annual_report", source_url=ANNUAL,
+        disclosure_date=date(2026, 4, 20), period="FY2025",
+        evidence_text="报告说明公司财务信息正常。",  # 不含 不存在/未发生/无重大 等明确否定词
+        page_number=1,
+    )
+    extraction = Part11RestatementExtraction(
+        restatements=RestatementDisclosure(status="no", negative_evidence=weak)
+    )
+    result = collect_part11_groups(
+        documents=[document], matter_documents=[], extracted={"restatements": extraction},
+        groups={"restatements"}, company_name="紫光股份有限公司",
+        as_of=date(2026, 6, 1), captured_at=CAPTURED, artifact_dir=Path("."),
+    )
+    assert {error.field_id for error in result.errors} == {
+        "financial_restatement_status", "financial_restatement_details"
+    }
