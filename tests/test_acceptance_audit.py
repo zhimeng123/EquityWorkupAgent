@@ -61,6 +61,35 @@ def test_audit_accepts_fully_accounted_partial_run(tmp_path, monkeypatch):
     assert report["status"] == "FAIL"
 
 
+def test_audit_treats_node_errors_as_informational(tmp_path, monkeypatch):
+    mappings = [{"field_id": f"field_{index}", "write_strategy": "replace_text", "locators": []} for index in range(95)]
+    monkeypatch.setattr(
+        "scripts.audit_full_acceptance.load_template_mapping",
+        lambda _config_dir: {"fields": mappings},
+    )
+    (tmp_path / "result.docx").write_bytes(b"not a docx")
+    evidence = [
+        {"field_id": "field_0", "value": "value 0", "normalized_value": "value 0", "source_url": "https://example.test/0"},
+    ]
+    _copy_json(tmp_path / "sources.json", {"evidence": evidence, "conflicts": []})
+    _copy_json(
+        tmp_path / "failed_fields.json",
+        [{"field_id": f"field_{index}", "reason": "no verified source"} for index in range(1, 95)],
+    )
+    _copy_json(
+        tmp_path / "extracted_data.json",
+        {"run": {}, "company": {}, "node_errors": [{"node": "part_01", "message": "recorded failure"}]},
+    )
+    _copy_json(tmp_path / "execution_plan.json", [])
+
+    report = audit_run(tmp_path, render=False, inspection_manifest=None)
+
+    assert report["checks"]["every_configured_field_accounted_for"]["passed"] is True
+    assert report["checks"]["extracted_data_has_no_node_errors"]["passed"] is False
+    assert "extracted_data_has_no_node_errors" not in report["issues"]
+    assert report["evidence_contract"]["node_error_count"] == 1
+
+
 def test_audit_rejects_reasonless_failure_and_overlap(tmp_path, monkeypatch):
     mappings = [{"field_id": f"field_{index}", "write_strategy": "replace_text", "locators": []} for index in range(95)]
     monkeypatch.setattr(

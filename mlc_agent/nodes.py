@@ -881,6 +881,9 @@ def self_check_node(state: WorkupAgentState) -> dict[str, Any]:
     )
     plan = _mark_step(state, "self_check", "completed" if result.passed else "failed", "; ".join(issues))
     save_json(Path(state["execution_plan_json_path"]), plan)
+    run_dir = state.get("run_dir")
+    if run_dir:
+        save_json(Path(run_dir) / "self_check_result.json", result.model_dump(mode="json"))
     get_logger().info("Self-check passed=%s", result.passed)
     return {
         "self_check_result": result.model_dump(mode="json"),

@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -529,6 +530,9 @@ def test_langgraph_full_flow_preserves_mvp1_while_new_parts_fail_explicitly(monk
     )
 
     assert result["self_check_result"]["passed"] is True
+    persisted_self_check = Path(result["run_dir"]) / "self_check_result.json"
+    assert persisted_self_check.is_file()
+    assert json.loads(persisted_self_check.read_text(encoding="utf-8"))["passed"] is True
     assert len(result["field_results"]) == 16
     assert len(result["failed_fields"]) == len(result["field_mapping"]) - 16
     assert all(item["reason"] for item in result["failed_fields"])

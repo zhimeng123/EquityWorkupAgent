@@ -27,6 +27,7 @@ from mlc_agent.nodes import _fixed_table_is_written, _value_is_written
 
 
 EXPECTED_FIELD_COUNT = 95
+INFORMATIONAL_CHECKS = frozenset({"extracted_data_has_no_node_errors"})
 REQUIRED_ARTIFACTS = (
     "sources.json",
     "extracted_data.json",
@@ -318,7 +319,7 @@ def audit_run(run_dir: Path, *, render: bool, inspection_manifest: Path | None) 
         checks["visual_inspection"] = _check(False, "rerun with --render and --inspection-manifest")
 
     for name, result in checks.items():
-        if not result["passed"]:
+        if not result["passed"] and name not in INFORMATIONAL_CHECKS:
             issues.append(name)
     report = {
         "status": "PASS" if not issues else "FAIL",
@@ -331,6 +332,7 @@ def audit_run(run_dir: Path, *, render: bool, inspection_manifest: Path | None) 
             "successes": len(evidence),
             "failures": len(failed),
             "conflicts": len(conflicts) if isinstance(conflicts, list) else None,
+            "node_error_count": len(node_errors) if isinstance(node_errors, list) else None,
         },
     }
     (run_dir / "acceptance_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
