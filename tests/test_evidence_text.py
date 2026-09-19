@@ -31,3 +31,45 @@ def test_anchor_uses_actual_supplied_page_and_exact_source_line():
 
     assert anchored["evidence"]["page_number"] == 8
     assert anchored["evidence"]["evidence_text"] in documents[0]["pages"][1]["text"]
+
+
+def test_anchor_accepts_evidence_across_pdf_line_breaks_without_rewriting():
+    url = "https://example.com/report.pdf"
+    source = "董事会审议\n通过本次对外投资议案。"
+
+    anchored = anchor_extracted_evidence(
+        {
+            "evidence": {
+                "source_url": url,
+                "page_number": 99,
+                "evidence_text": "董事会审议通过本次对外投资议案。",
+            }
+        },
+        [{"source_url": url, "pages": [{"page_number": 4, "text": source}]}],
+    )
+
+    assert anchored["evidence"]["page_number"] == 4
+    assert anchored["evidence"]["evidence_text"] == source
+
+
+def test_anchor_accepts_evidence_across_supplied_table_cells():
+    url = "https://example.com/report.pdf"
+    anchored = anchor_extracted_evidence(
+        {
+            "evidence": {
+                "source_url": url,
+                "page_number": 3,
+                "evidence_text": "关联方甲 销售商品 100",
+            }
+        },
+        [{
+            "source_url": url,
+            "pages": [{
+                "page_number": 3,
+                "text": "关联交易明细",
+                "tables": [{"rows": [["关联方甲", "销售商品", "100"]]}],
+            }],
+        }],
+    )
+
+    assert anchored["evidence"]["evidence_text"] == "关联方甲\t销售商品\t100"

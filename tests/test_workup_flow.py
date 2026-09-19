@@ -1,12 +1,19 @@
-from pathlib import Path
+from datetime import datetime
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
-from mlc_agent import integration
-from mlc_agent.graph import _observable_part
+from mlc_agent import integration, nodes
+from mlc_agent.config import load_source_priorities, load_template_mapping
+from mlc_agent.field_merger import build_static_values
+from mlc_agent.graph import (
+    _create_production_execution_plan_node,
+    _observable_part,
+    build_workup_graph,
+)
 from mlc_agent.official_site import OfficialPage
 from mlc_agent.schemas import CompanyIdentity, SourceValue
 from mlc_agent.production_adapters import SharedDisclosureBundle
@@ -15,6 +22,47 @@ from mlc_agent.service import run_workup
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_production_graph_does_not_require_xueqiu_fetch_for_required_fields():
+    graph = build_workup_graph()
+
+    assert "fetch_xueqiu" not in graph.nodes
+    assert "fetch_official_site" in graph.nodes
+    plan = _create_production_execution_plan_node({"field_mapping": []})["execution_plan"]
+    assert all(step["step_id"] != "fetch_xueqiu" for step in plan)
+
+    mappings = load_template_mapping(ROOT / "configs")["fields"]
+    priorities = load_source_priorities(ROOT / "configs", mappings)
+    for mapping in mappings:
+        non_xueqiu_sources = [
+            source
+            for source in priorities[mapping["field_id"]]
+            if source != "xueqiu"
+        ]
+        assert non_xueqiu_sources, mapping["field_id"]
+
+
+def test_production_graph_keeps_static_xueqiu_url_value():
+    company = CompanyIdentity(
+        company_name="紫光股份",
+        company_short_name="紫光股份",
+        stock_code="000938",
+        exchange="深圳证券交易所",
+        eastmoney_secid="0.000938",
+        eastmoney_secu_code="000938.SZ",
+        xueqiu_symbol="SZ000938",
+    )
+
+    values = build_static_values(
+        company,
+        ROOT / "Workup_template_260617-外测版.docx",
+        datetime.fromisoformat("2026-07-03T09:00:00+00:00"),
+    )
+
+    xueqiu_url = next(item for item in values if item.field_id == "xueqiu_url")
+    assert xueqiu_url.value == "https://xueqiu.com/S/SZ000938"
+    assert xueqiu_url.source == "system"
 
 
 class _GroupResult(BaseModel):
@@ -68,7 +116,21 @@ def _mock_successful_peer_boundary(monkeypatch):
         )
         for code in ("000034", "000977", "603019")
     ]
-    target = SimpleNamespace(model_copy=lambda **_kwargs: target)
+    target = SimpleNamespace(
+        annual_records=[
+            {
+                "report_date": "2025-12-31", "period_type": "annual", "fiscal_year": 2025,
+                "revenue": "100", "parent_net_profit": "10", "gross_profit": "20",
+                "source_url": "https://example.com/2025.pdf",
+            },
+            {
+                "report_date": "2024-12-31", "period_type": "annual", "fiscal_year": 2024,
+                "revenue": "90", "parent_net_profit": "9", "gross_profit": "18",
+                "source_url": "https://example.com/2024.pdf",
+            },
+        ],
+        model_copy=lambda **_kwargs: target,
+    )
     selected = [SimpleNamespace(stock_code=item.stock_code) for item in peers]
     peer_values = [
         SourceValue(
@@ -113,7 +175,7 @@ def test_part05_related_party_timeout_preserves_completed_peer_contract(monkeypa
     assert output["node_errors"][-1]["message"] == (
         "related_party_transactions: Request timed out"
     )
-    assert output["execution_plan"][0]["status"] == "completed"
+    assert output["execution_plan"][0]["status"] == "partial"
     assert output["execution_plan"][0]["detail"] == (
         "related_party_transactions: Request timed out"
     )
@@ -141,6 +203,31 @@ def test_part05_all_boundaries_succeed(monkeypatch):
         "peer_comparison_table", "peer_alignment_comment", "related_party_transactions"
     }
     assert output["node_errors"] == []
+
+
+def test_part05_peer_analysis_survives_shared_disclosure_failure(monkeypatch):
+    _mock_successful_peer_boundary(monkeypatch)
+    state = _part05_state()
+    state["part_results"]["shared_disclosures"] = {
+        "status": "failed",
+        "reason": "CNINFO company search returned HTTP 403",
+    }
+    monkeypatch.setattr(integration, "_llm_client", lambda: object())
+    monkeypatch.setattr(
+        integration,
+        "extract_part05_related_party_transactions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("shared disclosures unavailable")),
+    )
+
+    output = integration.part05_node(state)
+
+    result = output["part_results"]["part_05"]
+    assert result["status"] == "partial"
+    assert result["peer_analysis_status"] == "completed"
+    assert result["related_party_status"] == "failed"
+    assert {item["field_id"] for item in output["source_values"]} == {
+        "peer_comparison_table", "peer_alignment_comment",
+    }
 
 
 def test_part05_peer_failure_blocks_part08_without_running_its_llm(monkeypatch):
@@ -190,7 +277,7 @@ def test_part08_accepts_partial_part05_when_peer_contract_is_completed(monkeypat
     assert output["part_results"]["part_08"]["status"] == "completed"
 
 
-def test_part11_runs_isolated_groups_and_preserves_success_when_one_times_out(monkeypatch):
+def test_part11_runs_isolated_groups_and_preserves_success_when_one_times_out(monkeypatch, tmp_path):
     class Context:
         def __enter__(self):
             return object()
@@ -219,6 +306,7 @@ def test_part11_runs_isolated_groups_and_preserves_success_when_one_times_out(mo
             eastmoney_secu_code="000938.SZ", xueqiu_symbol="SZ000938",
         ).model_dump(mode="json"),
         "created_at": "2026-07-03T09:00:00+00:00",
+        "run_dir": str(tmp_path),
         "part_results": {}, "source_values": [], "node_errors": [], "artifacts": [],
         "execution_plan": [{"step_id": "part_11", "status": "pending", "detail": None}],
     }
@@ -254,13 +342,10 @@ def test_part_observability_logs_start_finish_and_elapsed_time(caplog):
     ("part", "node"),
     [
         ("part_01", integration.part01_node),
-        ("part_02", integration.part02_node),
         ("part_03", integration.part03_node),
         ("part_04", integration.part04_node),
-        ("part_05", integration.part05_node),
         ("part_06", integration.part06_node),
         ("part_07", integration.part07_node),
-        ("part_08", integration.part08_node),
         ("part_10", integration.part10_node),
         ("part_11", integration.part11_node),
     ],
@@ -292,6 +377,44 @@ def test_shared_disclosure_failure_propagates_without_model_validation_noise(par
         ),
     }
     assert "validation error" not in result["reason"].lower()
+    assert output["execution_plan"][0]["status"] == "failed"
+
+
+def test_failure_reason_uses_field_specific_upstream_error():
+    reasons = nodes._failure_reasons(
+        {
+            "config_dir": "configs",
+            "field_mapping": [{"field_id": "business_description"}],
+            "errors": [
+                {
+                    "node": "summarize_business_description",
+                    "message": "LLM returned HTTP 401",
+                }
+            ],
+            "node_errors": [],
+            "part_results": {},
+        }
+    )
+
+    assert reasons["business_description"] == (
+        "summarize_business_description: LLM returned HTTP 401"
+    )
+
+
+def test_part09_raw_status_matches_execution_plan_when_chart_inputs_fail():
+    state = {
+        "part_results": {"part_08": {}},
+        "source_values": [],
+        "artifacts": [],
+        "node_errors": [],
+        "run_dir": "/tmp",
+        "created_at": "2026-07-03T09:00:00+00:00",
+        "execution_plan": [{"step_id": "part_09", "status": "pending", "detail": None}],
+    }
+
+    output = integration.part09_node(state)
+
+    assert output["part_results"]["part_09"]["status"] == "failed"
     assert output["execution_plan"][0]["status"] == "failed"
 
 
@@ -405,10 +528,12 @@ def test_langgraph_full_flow_preserves_mvp1_while_new_parts_fail_explicitly(monk
         keep_intermediate=False,
     )
 
-    assert result["self_check_result"]["passed"] is True
+    assert result["self_check_result"]["passed"] is False
     assert len(result["field_results"]) == 16
     assert len(result["failed_fields"]) == len(result["field_mapping"]) - 16
     assert all(item["reason"] for item in result["failed_fields"])
     assert Path(result["output_docx_path"]).exists()
     assert Path(result["sources_json_path"]).exists()
-    assert all(step["status"] == "completed" for step in result["execution_plan"])
+    assert next(
+        step for step in result["execution_plan"] if step["step_id"] == "self_check"
+    )["status"] == "failed"

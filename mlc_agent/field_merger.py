@@ -63,6 +63,7 @@ def merge_field_values(
     mappings: list[dict[str, Any]],
     priorities: dict[str, list[str]],
     candidates: list[SourceValue],
+    failure_reasons: dict[str, str],
 ) -> tuple[dict[str, FieldResult], list[EvidenceRecord], list[ConflictRecord], list[FailedField]]:
     grouped: dict[str, list[SourceValue]] = {}
     for candidate in candidates:
@@ -89,7 +90,7 @@ def merge_field_values(
                 FailedField(
                     field_id=field_id,
                     label=label,
-                    reason="No verified value was returned by the configured sources.",
+                    reason=failure_reasons[field_id],
                     source_attempted=priority,
                 )
             )

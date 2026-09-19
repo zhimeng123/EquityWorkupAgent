@@ -213,7 +213,7 @@ class ConflictRecord(BaseModel):
 class ExecutionStep(BaseModel):
     step_id: str
     title: str
-    status: Literal["pending", "running", "completed", "failed"] = "pending"
+    status: Literal["pending", "running", "completed", "partial", "failed"] = "pending"
     detail: str | None = None
 
 

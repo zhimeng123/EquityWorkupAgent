@@ -53,7 +53,9 @@ class SecuritiesOfferingReview(BaseModel):
 
 
 class SecurityAnalysisResult(BaseModel):
-    market_history: MarketHistoryResult
+    status: Literal["completed", "partial", "failed"]
+    subresults: dict[str, Literal["completed", "partial", "failed"]] = Field(default_factory=dict)
+    market_history: MarketHistoryResult | None = None
     source_values: list[SourceValue]
     included_offerings: list[SecuritiesOffering]
     errors: list[str] = Field(default_factory=list)
@@ -115,7 +117,7 @@ def _format_offerings(items: list[SecuritiesOffering]) -> str:
     return "\n".join(lines)
 
 
-def collect_security_analysis(
+def _collect_security_analysis_complete(
     *,
     market: MarketHistoryResult,
     ipo_candidates: list[IpoEvidence],
@@ -299,11 +301,127 @@ def collect_security_analysis(
             )
         )
     return SecurityAnalysisResult(
+        status="completed" if not errors else "partial",
+        subresults={
+            "ipo_offerings": "completed" if not any(
+                error.startswith(("ipo_date:", "securities_offerings:")) for error in errors
+            ) else "partial",
+            "market_history": "completed",
+            "security_calculations": "completed",
+        },
         market_history=market,
         source_values=values,
         included_offerings=included_offerings,
         errors=errors,
     )
+
+
+def _collect_extraction_only(
+    *,
+    ipo_candidates: list[IpoEvidence],
+    offering_review: SecuritiesOfferingReview | None,
+    as_of: date,
+    captured_at: datetime,
+) -> tuple[list[SourceValue], list[SecuritiesOffering], list[str]]:
+    values: list[SourceValue] = []
+    errors: list[str] = []
+    included_offerings: list[SecuritiesOffering] = []
+    try:
+        ipo_evidence = select_ipo_evidence(ipo_candidates)
+        values.append(SourceValue(
+            field_id="ipo_date",
+            value=ipo_evidence.ipo_date.isoformat(),
+            raw_value=ipo_evidence.model_dump(mode="json"),
+            source=ipo_evidence.source,
+            source_url=ipo_evidence.source_url,
+            captured_at=captured_at,
+            period=ipo_evidence.evidence_period,
+        ))
+    except ValueError as exc:
+        errors.append(f"ipo_offerings: ipo_date: {exc}")
+
+    window_start = subtract_calendar_months(as_of, 12)
+    if offering_review is None:
+        errors.append("ipo_offerings: securities_offerings: no verified complete announcement-window review")
+    elif offering_review.window_start != window_start or offering_review.window_end != as_of:
+        errors.append("ipo_offerings: securities_offerings: announcement review window does not match the required 12 months")
+    else:
+        included_offerings = select_offerings_in_window(offering_review.offerings, as_of=as_of)
+        values.append(SourceValue(
+            field_id="securities_offerings",
+            value=_format_offerings(included_offerings),
+            raw_value=[item.model_dump(mode="json") for item in included_offerings],
+            source=offering_review.catalog_source,
+            source_url=offering_review.catalog_source_url,
+            captured_at=captured_at,
+            period=f"{window_start.isoformat()} to {as_of.isoformat()}",
+            item_evidence=[ItemEvidence(
+                item_id=item.offering_id,
+                source=item.source,
+                source_url=item.source_url,
+                period=item.announcement_date.isoformat(),
+                raw_value=item.model_dump(mode="json"),
+            ) for item in included_offerings],
+            metadata={"window_complete": True},
+        ))
+    return values, included_offerings, errors
+
+
+def collect_security_analysis(
+    *,
+    market: MarketHistoryResult | None,
+    ipo_candidates: list[IpoEvidence],
+    offering_review: SecuritiesOfferingReview | None,
+    as_of: date,
+    captured_at: datetime,
+    extraction_error: str | None = None,
+    market_error: str | None = None,
+) -> SecurityAnalysisResult:
+    """Collect independent Part 08 subresults without losing successful fields."""
+    if market is None:
+        values, included_offerings, errors = _collect_extraction_only(
+            ipo_candidates=ipo_candidates,
+            offering_review=offering_review,
+            as_of=as_of,
+            captured_at=captured_at,
+        )
+        if extraction_error:
+            errors = [extraction_error]
+        errors.append(market_error or "market_history: no verified market history result")
+        return SecurityAnalysisResult(
+            status="failed" if not values else "partial",
+            subresults={
+                "ipo_offerings": "failed" if extraction_error else ("completed" if not errors[:-1] else "partial"),
+                "market_history": "failed",
+                "security_calculations": "failed",
+            },
+            market_history=None,
+            source_values=values,
+            included_offerings=included_offerings,
+            errors=errors,
+        )
+
+    result = _collect_security_analysis_complete(
+        market=market,
+        ipo_candidates=ipo_candidates,
+        offering_review=offering_review,
+        as_of=as_of,
+        captured_at=captured_at,
+    )
+    if extraction_error:
+        result.source_values = [
+            item for item in result.source_values
+            if item.field_id not in {"ipo_date", "securities_offerings"}
+        ]
+        result.included_offerings = []
+        result.errors = [
+            error for error in result.errors
+            if not error.startswith(("ipo_date:", "securities_offerings:"))
+        ]
+        result.errors.append(extraction_error)
+        result.subresults["ipo_offerings"] = "failed"
+        result.status = "partial"
+    return result
 
 
 def security_analysis_node(
@@ -337,6 +455,30 @@ def security_analysis_node(
         )
     except (httpx.HTTPError, ValueError) as exc:
         reason = f"market_history: {exc}"
+        ipo_candidates = [IpoEvidence.model_validate(item) for item in inputs.get("ipo_candidates", [])]
+        offering_review = (
+            SecuritiesOfferingReview.model_validate(inputs["offering_review"])
+            if inputs.get("offering_review")
+            else None
+        )
+        if ipo_candidates or offering_review is not None:
+            result = collect_security_analysis(
+                market=None,
+                ipo_candidates=ipo_candidates,
+                offering_review=offering_review,
+                as_of=as_of,
+                captured_at=datetime.fromisoformat(state["created_at"]),
+                market_error=reason,
+            )
+            part_results = dict(state.get("part_results", {}))
+            part_results["part_08"] = result.model_dump(mode="json")
+            return {
+                "part_results": part_results,
+                "source_values": list(state.get("source_values", []))
+                + [item.model_dump(mode="json") for item in result.source_values],
+                "node_errors": list(state.get("node_errors", []))
+                + [{"node": "part_08", "message": item} for item in result.errors],
+            }
         part_results = dict(state.get("part_results", {}))
         part_results["part_08"] = {"status": "failed", "reason": reason}
         return {

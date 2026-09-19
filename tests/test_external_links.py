@@ -9,8 +9,10 @@ from mlc_agent.docx_writer import write_docx_by_mapping
 from mlc_agent.external_links import (
     build_google_finance_url,
     collect_external_links,
+    derive_cninfo_sz_org_id,
     discover_cninfo_org_id,
     google_finance_exchange,
+    validate_constructed_cninfo_company_url,
     validate_cninfo_company_url,
 )
 from mlc_agent.schemas import CompanyIdentity, FieldResult
@@ -76,6 +78,51 @@ def test_collect_validates_two_company_specific_direct_links():
     assert "stockCode=000938" in by_id["cninfo_company_url"].value
     assert by_id["google_finance_url"].source_url == by_id["google_finance_url"].value
     assert by_id["cninfo_company_url"].source_url == by_id["cninfo_company_url"].value
+
+
+def test_shenzhen_cninfo_org_id_is_derived_from_public_code_rule():
+    company = _company()
+
+    assert derive_cninfo_sz_org_id(company) == "gssz0000938"
+    assert validate_constructed_cninfo_company_url(company) == (
+        "https://www.cninfo.com.cn/new/disclosure/stock?"
+        "orgId=gssz0000938&stockCode=000938"
+    )
+
+
+def test_shenzhen_missing_org_id_does_not_call_cninfo_top_search():
+    company = _company()
+
+    def handler(request):
+        if request.url.host == "www.google.com":
+            return httpx.Response(
+                200,
+                text="<html>000938:SHE</html>",
+                request=request,
+            )
+        raise AssertionError(f"unexpected CNINFO request: {request.method} {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = collect_external_links(
+            client,
+            company=company,
+            cninfo_org_id=None,
+            captured_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+        )
+
+    assert result.errors == []
+    cninfo = next(item for item in result.source_values if item.field_id == "cninfo_company_url")
+    assert cninfo.value.endswith("orgId=gssz0000938&stockCode=000938")
+    assert cninfo.metadata["validation"] == "canonical CNINFO Shenzhen orgId matched stockCode and URL"
+
+
+def test_cninfo_shenzhen_org_id_derivation_rejects_other_markets():
+    try:
+        derive_cninfo_sz_org_id(_company("SH", "上海证券交易所", "600519"))
+    except ValueError as exc:
+        assert "requires an SZ listing" in str(exc)
+    else:
+        raise AssertionError("non-Shenzhen listing received a Shenzhen CNINFO orgId")
 
 
 def test_cninfo_wrong_company_response_is_rejected():

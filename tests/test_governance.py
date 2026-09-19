@@ -206,12 +206,12 @@ def test_controller_and_general_shareholder_changes_remain_separate():
 
 def test_controller_change_uses_its_own_announcement_evidence():
     collection = collect_governance(_input())
-    value = next(item for item in collection.source_values if item.field_id == "controller_change")
-    assert value.value == "No"
-    assert value.source == "cninfo"
-    assert value.source_url.endswith("controller-announcement.pdf")
-    assert value.source_url != REPORT_URL
-    assert value.period == "2026-05-01"
+    assert collection.result.controller_change.changed is False
+    assert collection.result.controller_change.source == "cninfo"
+    assert collection.result.controller_change.source_url.endswith("controller-announcement.pdf")
+    assert collection.result.controller_change.source_url != REPORT_URL
+    assert collection.result.controller_change.evidence_date.isoformat() == "2026-05-01"
+    assert all(item.field_id != "controller_change" for item in collection.source_values)
 
 
 def test_node_wrapper_returns_structured_result_and_source_values():
@@ -226,9 +226,9 @@ def test_node_wrapper_returns_structured_result_and_source_values():
     assert {item["field_id"] for item in output["source_values"]} >= {
         "board_structure",
         "major_shareholders",
-        "controller_change",
         "employees_total",
     }
+    assert all(item["field_id"] != "controller_change" for item in output["source_values"])
 
 
 def test_part_10_mapping_is_valid_for_real_template():

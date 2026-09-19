@@ -26,6 +26,7 @@ class EvidenceDocument(BaseModel):
     source_url: HttpUrl
     disclosure_date: date
     text: str = Field(min_length=1)
+    pages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FactEvidence(BaseModel):

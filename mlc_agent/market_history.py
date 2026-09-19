@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -13,11 +15,13 @@ from pydantic import BaseModel, Field, model_validator
 from mlc_agent.schemas import CompanyIdentity
 
 
-KLINE_API = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-EASTMONEY_REQUEST_INTERVAL_SECONDS = 1.0
-EASTMONEY_TRANSIENT_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+TENCENT_KLINE_API = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+TENCENT_REFERER = "https://gu.qq.com/"
+MARKET_REQUEST_INTERVAL_SECONDS = 1.0
+MARKET_TRANSIENT_RETRY_DELAYS_SECONDS = (1.0, 2.0)
 InstrumentKind = Literal["target", "peer", "benchmark"]
 Adjustment = Literal["forward_adjusted", "unadjusted"]
+ExchangeSuffix = Literal["SZ", "SH", "BJ"]
 
 
 class MarketInstrument(BaseModel):
@@ -25,6 +29,7 @@ class MarketInstrument(BaseModel):
     display_name: str
     eastmoney_secid: str
     kind: InstrumentKind
+    exchange_suffix: ExchangeSuffix | None = None
 
 
 class MarketPoint(BaseModel):
@@ -103,18 +108,21 @@ _BENCHMARKS = {
         display_name="Shenzhen Component Index",
         eastmoney_secid="0.399001",
         kind="benchmark",
+        exchange_suffix="SZ",
     ),
     "SH": MarketInstrument(
         stock_code="000001",
         display_name="SSE Composite Index",
         eastmoney_secid="1.000001",
         kind="benchmark",
+        exchange_suffix="SH",
     ),
     "BJ": MarketInstrument(
         stock_code="899050",
         display_name="Beijing Stock Exchange 50 Index",
         eastmoney_secid="0.899050",
         kind="benchmark",
+        exchange_suffix="BJ",
     ),
 }
 
@@ -137,11 +145,15 @@ def subtract_calendar_months(value: date, months: int) -> date:
 
 
 def _instrument(company: CompanyIdentity, kind: Literal["target", "peer"]) -> MarketInstrument:
+    suffix = company.eastmoney_secu_code.rsplit(".", 1)[-1].upper()
+    if suffix not in {"SZ", "SH", "BJ"}:
+        raise ValueError(f"unsupported exchange suffix for market history: {suffix}")
     return MarketInstrument(
         stock_code=company.stock_code,
         display_name=company.company_short_name,
         eastmoney_secid=company.eastmoney_secid,
         kind=kind,
+        exchange_suffix=suffix,
     )
 
 
@@ -179,17 +191,23 @@ def fetch_market_series(
     start_date: date,
     end_date: date,
     adjustment: Adjustment,
-    retry_delays: tuple[float, ...] = EASTMONEY_TRANSIENT_RETRY_DELAYS_SECONDS,
+    retry_delays: tuple[float, ...] = MARKET_TRANSIENT_RETRY_DELAYS_SECONDS,
     sleeper: Callable[[float], None] = sleep,
 ) -> MarketSeries:
+    suffix = instrument.exchange_suffix
+    if suffix is None:
+        raise ValueError(
+            f"exchange_suffix is required for market history: {instrument.stock_code}"
+        )
+    exchange_prefix = {"SZ": "sz", "SH": "sh", "BJ": "bj"}[suffix]
+    symbol = f"{exchange_prefix}{instrument.stock_code}"
+    adjusted = adjustment == "forward_adjusted"
     params = {
-        "secid": instrument.eastmoney_secid,
-        "klt": "101",
-        "fqt": "1" if adjustment == "forward_adjusted" else "0",
-        "beg": start_date.strftime("%Y%m%d"),
-        "end": end_date.strftime("%Y%m%d"),
-        "fields1": "f1,f2,f3,f4,f5,f6",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "_var": "kline_dayqfq" if adjusted else "kline_day",
+        "param": (
+            f"{symbol},day,{start_date.isoformat()},{end_date.isoformat()},1000,"
+            f"{'qfq' if adjusted else ''}"
+        ),
     }
     transient_errors = (
         httpx.ConnectError,
@@ -200,22 +218,56 @@ def fetch_market_series(
     )
     for attempt in range(len(retry_delays) + 1):
         try:
-            response = client.get(KLINE_API, params=params)
+            response = client.get(
+                TENCENT_KLINE_API,
+                params=params,
+                headers={"Referer": TENCENT_REFERER, "User-Agent": "Mozilla/5.0"},
+            )
             break
         except transient_errors as exc:
             if attempt == len(retry_delays):
                 raise RuntimeError(
-                    "Eastmoney market history request failed after "
+                    "Tencent market history request failed after "
                     f"{attempt + 1} attempts: stock_code={instrument.stock_code}, "
-                    f"secid={instrument.eastmoney_secid}, adjustment={adjustment}, "
+                    f"symbol={symbol}, adjustment={adjustment}, "
                     f"range={start_date.isoformat()}..{end_date.isoformat()}"
                 ) from exc
             sleeper(retry_delays[attempt])
     response.raise_for_status()
-    payload = response.json()
-    lines = payload.get("data", {}).get("klines") or []
-    if not lines:
+    raw = response.text.strip()
+    if "=" in raw:
+        raw = raw.split("=", 1)[1].strip().rstrip(";")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"invalid Tencent market history response for {instrument.stock_code}") from exc
+    if not isinstance(payload, dict) or payload.get("code") not in {0, "0"}:
+        raise ValueError(f"Tencent market history returned an invalid result for {instrument.stock_code}")
+    instrument_data = ((payload.get("data") or {}).get(symbol) or {})
+    if adjusted and instrument.kind == "benchmark":
+        # Broad-market indices have no corporate-action adjustment.  Tencent
+        # therefore exposes their valid daily series under ``day`` even when
+        # the request uses the qfq endpoint variable.
+        rows = instrument_data.get("qfqday") or instrument_data.get("day") or []
+    else:
+        rows = instrument_data.get("qfqday" if adjusted else "day") or []
+    if not isinstance(rows, list) or not rows:
         raise ValueError(f"no market history for {instrument.stock_code}")
+    lines = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 5:
+            raise ValueError(f"invalid Tencent K-line row for {instrument.stock_code}")
+        lines.append(
+            ",".join(
+                [
+                    str(row[0]),
+                    str(row[1]),
+                    str(row[2]),
+                    str(row[3]),
+                    str(row[4]),
+                ]
+            )
+        )
     return _parse_kline(
         lines,
         instrument=instrument,
@@ -334,7 +386,7 @@ def market_history(
     target: CompanyIdentity,
     peers: list[CompanyIdentity],
     as_of: date,
-    request_interval_seconds: float = EASTMONEY_REQUEST_INTERVAL_SECONDS,
+    request_interval_seconds: float = MARKET_REQUEST_INTERVAL_SECONDS,
     sleeper: Callable[[float], None] = sleep,
 ) -> MarketHistoryResult:
     """The single shared market-history interface for parts 8 and 9."""

@@ -421,20 +421,6 @@ def collect_governance(data: GovernanceReportInput) -> GovernanceCollection:
             shareholder_changes,
             item_evidence=shareholder_change_evidence,
         ),
-        SourceValue(
-            field_id="controller_change",
-            value="Yes" if data.controller_change.changed else "No",
-            raw_value=data.controller_change,
-            source=data.controller_change.source,
-            source_url=data.controller_change.source_url,
-            captured_at=data.captured_at,
-            period=data.controller_change.evidence_date.isoformat(),
-            metadata=(
-                {"page": data.controller_change.source_page}
-                if data.controller_change.source_page is not None
-                else {}
-            ),
-        ),
     ]
     for field_id, employee_value in (
         ("employees_prc", data.employees.prc),

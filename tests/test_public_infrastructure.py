@@ -22,7 +22,7 @@ from mlc_agent.config import load_template_mapping
 from mlc_agent.docx_writer import validate_template_mapping, write_docx_by_mapping
 from mlc_agent.exceptions import DataSourceError, TemplateMappingError
 from mlc_agent.report_parser import parse_machine_generated_pdf
-from mlc_agent.nodes import self_check_node
+from mlc_agent.nodes import finalize_run_node, self_check_node
 from mlc_agent.schemas import FieldResult
 
 
@@ -255,6 +255,119 @@ def test_failed_multi_target_rolls_back_all_targets(tmp_path):
     assert written.paragraphs[1].text == "SECOND"
 
 
+def test_writer_rejects_blank_text_and_empty_fixed_table_values(tmp_path):
+    template = tmp_path / "template.docx"
+    output = tmp_path / "result.docx"
+    document = Document()
+    document.add_paragraph("TEXT")
+    document.add_table(rows=1, cols=1).cell(0, 0).text = "TABLE"
+    document.save(template)
+    text_mapping = [{
+        "field_id": "text",
+        "label": "Text",
+        "source_type": "fixed",
+        "locators": [{"kind": "paragraph", "paragraph_index": 0, "expected_text": "TEXT"}],
+        "write_strategy": "replace_text",
+        "output_format": "text",
+    }]
+    table_mapping = [{
+        "field_id": "table",
+        "label": "Table",
+        "source_type": "derived",
+        "locators": [{
+            "kind": "table_cell",
+            "table_path": [{"table_index": 0, "row_index": 0, "column_index": 0}],
+            "expected_text": "TABLE",
+        }],
+        "write_strategy": "fill_fixed_table",
+        "output_format": "table",
+    }]
+    assert write_docx_by_mapping(
+        template,
+        output,
+        text_mapping,
+        {"text": _result("text", "")},
+    ) == [("text", "字段 text 的 DOCX 值不能为空")]
+    assert write_docx_by_mapping(
+        template,
+        output,
+        table_mapping,
+        {"table": _result("table", "", structured_value=[[]])},
+    ) == [("table", "fill_fixed_table requires a non-empty structured_value as list[list]")]
+
+
+def test_self_check_rejects_blank_result_value(tmp_path):
+    output = tmp_path / "result.docx"
+    document = Document()
+    document.add_paragraph()
+    document.save(output)
+    mapping = [{
+        "field_id": "blank",
+        "label": "Blank",
+        "source_type": "fixed",
+        "locators": [{"kind": "paragraph", "paragraph_index": 0, "expected_empty": True}],
+        "write_strategy": "replace_text",
+        "output_format": "text",
+    }]
+    state = _self_check_state(tmp_path, output, mapping, [])
+    state["field_results"] = {"blank": _result("blank", "").model_dump(mode="json")}
+    state["evidence_records"] = [{
+        "field_id": "blank",
+        "value": "",
+        "normalized_value": "",
+        "source_url": "https://example.com",
+    }]
+    checked = self_check_node(state)
+    assert checked["self_check_result"]["checks"]["written_values_match_mapping"] is False
+
+
+def test_self_check_counts_image_placements_not_unique_image_relationships(tmp_path):
+    project_root = Path(__file__).parents[1]
+    image = tmp_path / "shared.png"
+    image.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    ))
+    mappings = [{
+        "field_id": "image_one",
+        "label": "Image one",
+        "source_type": "fixed",
+        "locators": [{"kind": "paragraph", "paragraph_index": 0, "expected_empty": True}],
+        "write_strategy": "insert_image",
+        "output_format": "image",
+    }, {
+        "field_id": "image_two",
+        "label": "Image two",
+        "source_type": "fixed",
+        "locators": [{"kind": "paragraph", "paragraph_index": 1, "expected_empty": True}],
+        "write_strategy": "insert_image",
+        "output_format": "image",
+    }]
+    template = tmp_path / "template.docx"
+    output = tmp_path / "result.docx"
+    document = Document()
+    document.add_paragraph()
+    document.add_paragraph()
+    document.save(template)
+    results = {
+        field_id: _result(field_id, "chart", artifact_path=str(image))
+        for field_id in ("image_one", "image_two")
+    }
+    assert write_docx_by_mapping(template, output, mappings, results) == []
+    for name in ("sources", "failed_fields", "extracted_data", "execution_plan"):
+        (tmp_path / f"{name}.json").write_text("[]", encoding="utf-8")
+    state = _self_check_state(tmp_path, output, mappings, [])
+    state["field_results"] = {key: value.model_dump(mode="json") for key, value in results.items()}
+    state["evidence_records"] = [
+        {"field_id": key, "value": value.value, "normalized_value": value.value, "source_url": "https://example.com"}
+        for key, value in results.items()
+    ]
+    state["artifacts"] = [
+        {"field_id": key, "path": str(image)} for key in results
+    ]
+    checked = self_check_node(state)
+    assert checked["self_check_result"]["checks"]["images_embedded"] is True
+
+
 def test_mapped_failure_and_out_of_scope_blue_note_are_separated(tmp_path):
     template = tmp_path / "template.docx"
     output = tmp_path / "result.docx"
@@ -348,6 +461,102 @@ def test_cninfo_catalog_query_is_company_specific():
     assert documents[0].url.endswith("report.pdf")
 
 
+def test_cninfo_catalog_discards_rows_for_another_security():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "hasMore": False,
+                "announcements": [
+                    {
+                        "announcementId": "other",
+                        "announcementTitle": "2025年年度报告",
+                        "announcementTime": 1775001600000,
+                        "adjunctUrl": "other.pdf",
+                        "secCode": "000939",
+                    },
+                    {
+                        "announcementId": "target",
+                        "announcementTitle": "2025年年度报告",
+                        "announcementTime": 1775001600000,
+                        "adjunctUrl": "target.pdf",
+                        "secCode": "000938",
+                    },
+                ],
+            },
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        documents = fetch_company_announcements(
+            client,
+            stock_code="000938",
+            org_id="gssz0000938",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 7, 3),
+        )
+
+    assert [item.announcement_id for item in documents] == ["target"]
+
+
+def test_cninfo_timestamp_is_normalized_to_china_date():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "hasMore": False,
+                "announcements": [{
+                    "announcementId": "utc",
+                    "announcementTitle": "董事变更公告",
+                    "announcementTime": 1789488000000,
+                    "adjunctUrl": "notice.pdf",
+                    "secCode": "000938",
+                }],
+            },
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        documents = fetch_company_announcements(
+            client,
+            stock_code="000938",
+            org_id="gssz0000938",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+        )
+
+    assert documents[0].published_at.date() == date(2026, 9, 16)
+
+
+def test_cninfo_classifies_half_year_report_before_annual_report():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "hasMore": False,
+                "announcements": [{
+                    "announcementId": "interim",
+                    "announcementTitle": "2025年半年度报告",
+                    "announcementTime": 1754006400000,
+                    "adjunctUrl": "reports/interim.pdf",
+                    "secCode": "000938",
+                }],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        documents = fetch_company_announcements(
+            client,
+            stock_code="000938",
+            org_id="gssz0000938",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+
+    assert documents[0].document_type == "interim_report"
+    assert documents[0].report_year == 2025
+
+
 def test_pdf_parser_reports_unapproved_dependency(monkeypatch, tmp_path):
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
@@ -424,6 +633,82 @@ def test_self_check_verifies_failed_expected_empty_target(tmp_path):
     assert dirty["self_check_result"]["passed"] is False
 
 
+def test_self_check_accepts_historical_multiline_false_positive_fields(tmp_path):
+    project_root = Path(__file__).parents[1]
+    mappings = load_template_mapping(project_root / "configs")["fields"]
+    historical_ids = {
+        "listed_outside_directorships",
+        "major_ma_past_12m",
+        "ma_plan_next_12m",
+        "quarterly_revenue_profitability",
+        "customers_suppliers_concentration",
+        "business_outlook_risks",
+        "key_executive_profiles",
+        "major_shareholders",
+    }
+    mappings = [mapping for mapping in mappings if mapping["field_id"] in historical_ids]
+    assert {mapping["field_id"] for mapping in mappings} == historical_ids
+
+    output = tmp_path / "result.docx"
+    results = {
+        mapping["field_id"]: _result(
+            mapping["field_id"],
+            f"{mapping['field_id']} first line\n{mapping['field_id']} second line",
+        )
+        for mapping in mappings
+    }
+    assert write_docx_by_mapping(
+        project_root / "Workup_template_260617-外测版.docx",
+        output,
+        mappings,
+        results,
+    ) == []
+
+    state = _self_check_state(tmp_path, output, mappings, [])
+    state["field_results"] = {
+        field_id: result.model_dump(mode="json")
+        for field_id, result in results.items()
+    }
+    state["evidence_records"] = [
+        {"field_id": field_id, "source_url": "https://example.com/source"}
+        for field_id in results
+    ]
+
+    checked = self_check_node(state)
+    assert checked["self_check_result"]["passed"] is False
+    assert checked["self_check_result"]["checks"]["written_values_match_mapping"] is True
+    assert checked["self_check_result"]["checks"]["failed_targets_preserved"] is True
+    assert checked["self_check_result"]["checks"]["all_95_configured_fields_succeeded"] is False
+
+
+def test_self_check_checks_multiline_value_at_every_locator(tmp_path):
+    project_root = Path(__file__).parents[1]
+    all_mappings = load_template_mapping(project_root / "configs")["fields"]
+    mapping = next(item for item in all_mappings if item["field_id"] == "market_capitalization")
+    value = "market cap first line\nmarket cap second line"
+    result = _result("market_capitalization", value)
+    output = tmp_path / "result.docx"
+
+    assert write_docx_by_mapping(
+        project_root / "Workup_template_260617-外测版.docx",
+        output,
+        [mapping],
+        {"market_capitalization": result},
+    ) == []
+
+    state = _self_check_state(tmp_path, output, [mapping], [])
+    state["field_results"] = {"market_capitalization": result.model_dump(mode="json")}
+    state["evidence_records"] = [{
+        "field_id": "market_capitalization",
+        "source_url": "https://example.com/source",
+    }]
+
+    checked = self_check_node(state)
+    assert checked["self_check_result"]["passed"] is False
+    assert checked["self_check_result"]["checks"]["written_values_match_mapping"] is True
+    assert checked["self_check_result"]["checks"]["all_95_configured_fields_succeeded"] is False
+
+
 def test_self_check_reports_corrupt_docx_without_raising(tmp_path):
     output = tmp_path / "result.docx"
     output.write_bytes(b"not a docx")
@@ -432,3 +717,18 @@ def test_self_check_reports_corrupt_docx_without_raising(tmp_path):
     assert result["self_check_result"]["checks"]["docx_reopens"] is False
     assert result["self_check_result"]["passed"] is False
     assert any("DOCX cannot be reopened" in issue for issue in result["self_check_result"]["issues"])
+
+
+def test_finalize_marks_run_failed_when_self_check_fails(tmp_path):
+    state = {
+        "field_results": {},
+        "failed_fields": [{"field_id": "missing", "reason": "not available"}],
+        "self_check_result": {"passed": False},
+        "execution_plan": [{"step_id": "finalize", "status": "pending", "detail": None}],
+        "execution_plan_json_path": str(tmp_path / "execution_plan.json"),
+        "run_dir": str(tmp_path),
+        "output_docx_path": str(tmp_path / "result.docx"),
+    }
+    result = finalize_run_node(state)
+    assert result["execution_plan"][0]["status"] == "failed"
+    assert result["execution_plan"][0]["detail"] == "Run blocked by failed self-check"

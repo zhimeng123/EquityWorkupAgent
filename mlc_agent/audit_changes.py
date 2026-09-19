@@ -55,6 +55,7 @@ class EvidenceDocument(BaseModel):
     disclosure_date: date
     period: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    pages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MatterEvidenceDocument(BaseModel):
@@ -62,6 +63,7 @@ class MatterEvidenceDocument(BaseModel):
     source_url: HttpUrl
     disclosure_date: date
     text: str = Field(min_length=1)
+    pages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FactEvidence(BaseModel):
@@ -196,6 +198,7 @@ class Part11Artifact(BaseModel):
 
 
 class Part11Result(BaseModel):
+    status: Literal["completed", "partial", "failed"]
     source_values: list[SourceValue] = Field(default_factory=list)
     raw_result: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[Part11Artifact] = Field(default_factory=list)
@@ -583,11 +586,265 @@ def collect_part11(
         artifacts.append(Part11Artifact(path=str(attachment.resolve())))
 
     return Part11Result(
+        status="completed" if not errors else "partial" if values else "failed",
         source_values=values,
         raw_result={
             "audit": data.latest_audit.model_dump(mode="json"),
             "news_events": [item.model_dump(mode="json") for item in news_events],
         },
+        artifacts=artifacts,
+        errors=errors,
+    )
+
+
+def collect_part11_groups(
+    *,
+    documents: list[EvidenceDocument],
+    matter_documents: list[MatterEvidenceDocument],
+    extracted: dict[str, Any],
+    groups: set[str],
+    company_name: str,
+    as_of: date,
+    captured_at: datetime,
+    artifact_dir: Path,
+) -> Part11Result:
+    """Collect only the extraction groups that completed successfully.
+
+    This deliberately does not synthesize placeholder disclosures for failed
+    groups.  A failed extraction can therefore only produce its group error at
+    the integration boundary, while verified values from other groups remain
+    eligible for writing.
+    """
+    values: list[SourceValue] = []
+    errors: list[Part11Error] = []
+    artifacts: list[Part11Artifact] = []
+
+    def attempt(field_id: str, builder: Any) -> None:
+        try:
+            values.append(builder())
+        except Exception as exc:
+            errors.append(Part11Error(field_id=field_id, reason=str(exc)))
+
+    if "audit" in groups:
+        audit = extracted["audit"]
+        latest = audit.latest_audit
+        big4 = identify_big4(latest.auditor_name)
+        if big4 is None and not latest.non_big4_background:
+            errors.append(Part11Error(field_id="auditor_profile", reason="Non-Big 4 auditor background was not disclosed."))
+        else:
+            profile = (
+                f"{latest.auditor_name} | Big 4: Yes ({big4})"
+                if big4 else
+                f"{latest.auditor_name} | Big 4: No | Background: {latest.non_big4_background}"
+            )
+            attempt("auditor_profile", lambda: _value(
+                "auditor_profile", profile, latest.evidence, documents, captured_at,
+                latest.model_dump(mode="json")
+            ))
+        attempt("audit_opinion", lambda: _value(
+            "audit_opinion", latest.opinion, latest.evidence, documents, captured_at,
+            latest.model_dump(mode="json")
+        ))
+        attempt("qualified_opinion_details", lambda: _value(
+            "qualified_opinion_details",
+            latest.modified_opinion_details or "N/A - standard unqualified opinion",
+            latest.evidence, documents, captured_at, latest.model_dump(mode="json")
+        ))
+        changes = [
+            item for item in audit.post_report_auditor_changes
+            if latest.evidence.disclosure_date < item.effective_date <= as_of
+        ]
+        if audit.previous_audit is None:
+            errors.extend([
+                Part11Error(field_id="auditor_change_status", reason="Previous full-year audit record is unavailable."),
+                Part11Error(field_id="auditor_change_details", reason="Previous full-year audit record is unavailable."),
+            ])
+        else:
+            try:
+                _document_for(audit.previous_audit.evidence, documents)
+                changed = audit.previous_audit.auditor_name != latest.auditor_name or bool(changes)
+                evidence = changes[0].evidence if changes else latest.evidence
+                details = []
+                if audit.previous_audit.auditor_name != latest.auditor_name:
+                    details.append(
+                        f"FY{audit.previous_audit.fiscal_year} {audit.previous_audit.auditor_name} -> "
+                        f"FY{latest.fiscal_year} {latest.auditor_name}"
+                    )
+                details.extend(
+                    f"{item.effective_date.isoformat()} | {item.former_auditor} -> {item.new_auditor} | {item.reason}"
+                    for item in changes
+                )
+                attempt("auditor_change_status", lambda: _value(
+                    "auditor_change_status", "Yes" if changed else "No", evidence,
+                    documents, captured_at, {"events": [item.model_dump(mode="json") for item in changes]}
+                ))
+                attempt("auditor_change_details", lambda: _value(
+                    "auditor_change_details", "\n".join(details) if details else "Not applicable",
+                    evidence, documents, captured_at,
+                    {"events": [item.model_dump(mode="json") for item in changes]},
+                    items=_fact_items(changes, documents)
+                ))
+            except Exception as exc:
+                errors.extend([
+                    Part11Error(field_id="auditor_change_status", reason=str(exc)),
+                    Part11Error(field_id="auditor_change_details", reason=str(exc)),
+                ])
+
+    if "restatements" in groups:
+        restatement = extracted["restatements"].restatements
+        if restatement.status == "not_disclosed":
+            evidence = restatement.coverage_evidence
+            assert evidence is not None
+            attempt("financial_restatement_status", lambda: _value(
+                "financial_restatement_status", "Not disclosed", evidence, documents,
+                captured_at, restatement.model_dump(mode="json")
+            ))
+            attempt("financial_restatement_details", lambda: _value(
+                "financial_restatement_details", "Not disclosed", evidence, documents,
+                captured_at, restatement.model_dump(mode="json")
+            ))
+        else:
+            window = subtract_years(as_of, 2)
+            events = [item for item in restatement.events if window <= item.event_date <= as_of]
+            if restatement.status == "yes" and not events:
+                errors.extend([
+                    Part11Error(field_id="financial_restatement_status", reason="No disclosed restatement falls in the 24-month window."),
+                    Part11Error(field_id="financial_restatement_details", reason="No disclosed restatement falls in the 24-month window."),
+                ])
+            else:
+                evidence = events[0].evidence if events else restatement.negative_evidence
+                assert evidence is not None
+                detail = "\n".join(
+                    f"{item.event_date.isoformat()} | {item.periods_affected} | {item.details}" for item in events
+                ) or "Not applicable"
+                attempt("financial_restatement_status", lambda: _value(
+                    "financial_restatement_status", "Yes" if events else "No", evidence,
+                    documents, captured_at, restatement.model_dump(mode="json")
+                ))
+                attempt("financial_restatement_details", lambda: _value(
+                    "financial_restatement_details", detail, evidence, documents, captured_at,
+                    restatement.model_dump(mode="json"), items=_fact_items(events, documents)
+                ))
+
+    material_groups = {
+        "board_changes": ("board_officer_material_change", "board_officer", "board_officer_changes"),
+        "business_changes": ("business_operation_material_change", "business_operation", "business_operation_changes"),
+        "shareholder_changes": ("top3_shareholder_change", "top3_shareholder", "top3_shareholder_changes"),
+    }
+    for group, (field_id, category, attribute) in material_groups.items():
+        if group not in groups:
+            continue
+        disclosure = getattr(extracted[group], attribute)
+        if any(item.category != category for item in disclosure.events):
+            errors.append(Part11Error(field_id=field_id, reason=f"{category} disclosure contains another category."))
+            continue
+        events = [item for item in disclosure.events if item.event_date <= as_of]
+        if disclosure.status == "not_disclosed":
+            assert disclosure.coverage_evidence is not None
+            attempt(field_id, lambda: _value(
+                field_id, "Not disclosed", disclosure.coverage_evidence, documents,
+                captured_at, disclosure.model_dump(mode="json")
+            ))
+            continue
+        evidence = events[0].evidence if events else disclosure.negative_evidence
+        if evidence is None:
+            errors.append(Part11Error(field_id=field_id, reason="Material change evidence is missing."))
+            continue
+        attempt(field_id, lambda: _value(
+            field_id, "Yes" if events else "No", evidence, documents, captured_at,
+            disclosure.model_dump(mode="json"), items=_fact_items(events, documents)
+        ))
+
+    legal_groups = {
+        "litigation": ("litigation_status", "litigation"),
+        "regulatory": ("regulatory_status", "regulatory"),
+    }
+    selected_by_kind: dict[str, list[LegalRegulatoryMatter]] = {}
+    for group, (field_id, kind) in legal_groups.items():
+        if group not in groups:
+            continue
+        disclosure = getattr(extracted[group], kind)
+        if disclosure.status == "not_disclosed":
+            evidence = disclosure.coverage_evidence
+            assert evidence is not None
+            try:
+                document = _matter_document_for(evidence, documents + matter_documents)
+                values.append(SourceValue(
+                    field_id=field_id, value="Not disclosed", raw_value=disclosure.model_dump(mode="json"),
+                    source=document.source, source_url=str(evidence.source_url), captured_at=captured_at,
+                    period=evidence.disclosure_date.isoformat(),
+                ))
+            except Exception as exc:
+                errors.append(Part11Error(field_id=field_id, reason=str(exc)))
+            selected_by_kind[kind] = []
+            continue
+        try:
+            selected = select_in_scope_matters(disclosure, kind=kind, as_of=as_of)
+            selected_by_kind[kind] = selected
+            evidence = selected[0].evidence if selected else disclosure.negative_evidence
+            assert evidence is not None
+            document = _matter_document_for(evidence, documents + matter_documents)
+            values.append(SourceValue(
+                field_id=field_id, value="Yes" if selected else "No",
+                raw_value=disclosure.model_dump(mode="json"), source=document.source,
+                source_url=str(evidence.source_url), captured_at=captured_at,
+                period=evidence.disclosure_date.isoformat(), item_evidence=_matter_items(selected, documents + matter_documents),
+            ))
+        except Exception as exc:
+            errors.append(Part11Error(field_id=field_id, reason=str(exc)))
+            selected_by_kind[kind] = []
+
+    if "news" in groups:
+        news_articles = extracted["news"].news_articles
+        accepted = []
+        for article in news_articles:
+            if article.company_name.strip() != company_name.strip():
+                errors.append(Part11Error(
+                    field_id="negative_news_input",
+                    reason=f"News article company_name does not exactly match the target company: {article.company_name!r} != {company_name!r} ({article.original_url})",
+                ))
+                continue
+            accepted.append(article)
+        news_events = select_and_deduplicate_news(accepted, as_of=as_of)
+        if not news_events:
+            errors.extend([
+                Part11Error(field_id="negative_news_summary", reason="No verified in-scope negative news article."),
+                Part11Error(field_id="negative_news_attachment", reason="No verified in-scope negative news article."),
+            ])
+        else:
+            summary_lines = []
+            news_evidence = []
+            for event_index, event in enumerate(news_events, start=1):
+                primary = event.articles[0]
+                summary_lines.append(
+                    f"{primary.published_date.isoformat()} | {primary.publisher} | {primary.title} | "
+                    f"{primary.english_summary or 'Full text unavailable'} | {primary.original_url}"
+                )
+                news_evidence.extend(ItemEvidence(
+                    item_id=f"{event_index}:{article.publisher}", source="news",
+                    source_url=str(article.original_url), period=article.published_date.isoformat(),
+                    raw_value=article.model_dump(mode="json")
+                ) for article in event.articles)
+            primary = news_events[0].articles[0]
+            values.append(SourceValue(
+                field_id="negative_news_summary", value="\n".join(summary_lines),
+                raw_value=[item.model_dump(mode="json") for item in news_events], source="news",
+                source_url=str(primary.original_url), captured_at=captured_at,
+                period="rolling 12 months", item_evidence=news_evidence,
+            ))
+            try:
+                attachment = build_negative_news_attachment(
+                    news_events, output_path=artifact_dir / "negative_news_articles.docx",
+                    company_name=company_name, as_of=as_of,
+                )
+                artifacts.append(Part11Artifact(path=str(attachment.resolve())))
+            except Exception as exc:
+                errors.append(Part11Error(field_id="negative_news_attachment", reason=str(exc)))
+
+    return Part11Result(
+        status="completed" if not errors else "partial" if values else "failed",
+        source_values=values,
+        raw_result={group: extracted[group].model_dump(mode="json") for group in groups if group in extracted},
         artifacts=artifacts,
         errors=errors,
     )

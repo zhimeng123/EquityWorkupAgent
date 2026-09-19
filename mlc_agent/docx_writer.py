@@ -294,8 +294,16 @@ def validate_template_mapping(template_path: Path, mappings: list[dict[str, Any]
 def _write_fixed_table(
     document: DocumentObject, locator: dict[str, Any], rows: Any
 ) -> None:
-    if not isinstance(rows, list) or any(not isinstance(row, list) for row in rows):
-        raise TemplateMappingError("fill_fixed_table requires structured_value as list[list]")
+    if (
+        not isinstance(rows, list)
+        or not rows
+        or any(not isinstance(row, list) or not row for row in rows)
+    ):
+        raise TemplateMappingError(
+            "fill_fixed_table requires a non-empty structured_value as list[list]"
+        )
+    if any(value is None or not str(value).strip() for row in rows for value in row):
+        raise TemplateMappingError("fill_fixed_table cannot write blank cell values")
     _, table = _cell_for_locator(document, locator)
     start = locator["table_path"][-1]
     for row_offset, values in enumerate(rows):
@@ -307,6 +315,23 @@ def _write_fixed_table(
             if target_column >= len(table.columns):
                 raise TemplateMappingError("fixed table data exceeds configured table columns")
             table.cell(target_row, target_column).text = str(value)
+
+
+def _validate_result_for_mapping(
+    mapping: dict[str, Any], result: FieldResult
+) -> None:
+    """Reject values that cannot produce a visible field in the output DOCX."""
+    strategy = mapping["write_strategy"]
+    if strategy == "fill_fixed_table":
+        # The table writer performs the detailed shape and cell validation.
+        return
+    if strategy == "insert_image":
+        # The image path is validated by _write_one_locator.
+        return
+    if not result.value.strip():
+        raise TemplateMappingError(
+            f"字段 {mapping['field_id']} 的 DOCX 值不能为空"
+        )
 
 
 def _write_one_locator(
@@ -367,6 +392,7 @@ def write_docx_by_mapping(
         document.save(snapshot)
         snapshot.seek(0)
         try:
+            _validate_result_for_mapping(mapping, result)
             for locator in mapping["locators"]:
                 _write_one_locator(document, mapping, locator, result)
         except (IndexError, KeyError, TemplateMappingError) as exc:

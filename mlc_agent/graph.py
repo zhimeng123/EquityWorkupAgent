@@ -10,7 +10,6 @@ from mlc_agent.nodes import (
     create_execution_plan_node,
     fetch_eastmoney_node,
     fetch_official_site_node,
-    fetch_xueqiu_node,
     finalize_run_node,
     generate_evidence_files_node,
     initialize_run_node,
@@ -38,6 +37,25 @@ from mlc_agent.integration import (
 )
 
 
+def _create_production_execution_plan_node(state):
+    """Build the production plan without the retired Xueqiu fetch step.
+
+    ``create_execution_plan_node`` remains the shared plan definition used by
+    lower-level callers.  The production graph no longer executes the
+    optional Xueqiu source, so its plan must not advertise an unexecuted step.
+    """
+
+    result = create_execution_plan_node(state)
+    return {
+        **result,
+        "execution_plan": [
+            step
+            for step in result["execution_plan"]
+            if step["step_id"] != "fetch_xueqiu"
+        ],
+    }
+
+
 def _observable_part(name, node):
     @wraps(node)
     def run(state):
@@ -56,11 +74,10 @@ def build_workup_graph():
     nodes = [
         ("initialize_run", initialize_run_node),
         ("load_template_mapping", load_template_mapping_node),
-        ("create_execution_plan", create_execution_plan_node),
+        ("create_execution_plan", _create_production_execution_plan_node),
         ("confirm_plan", confirm_plan_node),
         ("resolve_company", resolve_company_node),
         ("fetch_eastmoney", fetch_eastmoney_node),
-        ("fetch_xueqiu", fetch_xueqiu_node),
         ("fetch_official_site", fetch_official_site_node),
         ("shared_disclosures", collect_shared_disclosures_node),
         ("part_01", part01_node),

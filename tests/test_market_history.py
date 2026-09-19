@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+import json
 
 import httpx
 import pytest
@@ -121,18 +122,25 @@ def test_market_history_fetches_one_adjusted_set_and_separate_unadjusted_snapsho
     calls = []
 
     def handler(request):
-        calls.append((request.url.params["secid"], request.url.params["fqt"], request.url.params["beg"]))
-        if request.url.params["fqt"] == "0":
+        symbol, _kind, begin, _end, _count, adjustment = request.url.params["param"].split(",")
+        calls.append((symbol, adjustment, begin))
+        if adjustment == "":
             lines = [
-                "2025-07-03,9,10,11,8,0,0,0,0,0,0",
-                "2026-07-03,11,12,13,9,0,0,0,0,0,0",
+                ["2025-07-03", "9", "10", "11", "8", "0"],
+                ["2026-07-03", "11", "12", "13", "9", "0"],
             ]
+            key = "day"
         else:
             lines = [
-                "2024-07-03,9,10,11,8,0,0,0,0,0,0",
-                "2026-07-03,11,12,13,9,0,0,0,0,0,0",
+                ["2024-07-03", "9", "10", "11", "8", "0"],
+                ["2026-07-03", "11", "12", "13", "9", "0"],
             ]
-        return httpx.Response(200, json={"data": {"klines": lines}}, request=request)
+            key = "qfqday"
+        return httpx.Response(
+            200,
+            text=f"kline_day={json.dumps({'code': 0, 'data': {symbol: {key: lines}}})}",
+            request=request,
+        )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = market_history(
@@ -141,13 +149,13 @@ def test_market_history_fetches_one_adjusted_set_and_separate_unadjusted_snapsho
         )
     assert len(calls) == 6
     assert calls[:5] == [
-        ("0.000938", "1", "20240703"),
-        ("0.399001", "1", "20240703"),
-        ("1.600001", "1", "20240703"),
-        ("1.600002", "1", "20240703"),
-        ("1.600003", "1", "20240703"),
+        ("sz000938", "qfq", "2024-07-03"),
+        ("sz399001", "qfq", "2024-07-03"),
+        ("sh600001", "qfq", "2024-07-03"),
+        ("sh600002", "qfq", "2024-07-03"),
+        ("sh600003", "qfq", "2024-07-03"),
     ]
-    assert calls[5][0:2] == ("0.000938", "0")
+    assert calls[5][0:2] == ("sz000938", "")
     assert result.snapshot.current_price == Decimal("12")
     assert result.snapshot.week_52_high == Decimal("13")
     assert result.snapshot.week_52_low == Decimal("8")
@@ -171,17 +179,24 @@ def test_market_history_rejects_incomplete_24_month_coverage():
     peers = [_company("600001", "SH"), _company("600002", "SH"), _company("600003", "SH")]
 
     def handler(request):
-        if request.url.params["fqt"] == "0":
+        symbol, _kind, _begin, _end, _count, adjustment = request.url.params["param"].split(",")
+        if adjustment == "":
             lines = [
-                "2025-07-03,9,10,11,8,0,0,0,0,0,0",
-                "2026-07-03,11,12,13,9,0,0,0,0,0,0",
+                ["2025-07-03", "9", "10", "11", "8", "0"],
+                ["2026-07-03", "11", "12", "13", "9", "0"],
             ]
+            key = "day"
         else:
             lines = [
-                "2025-07-03,9,10,11,8,0,0,0,0,0,0",
-                "2026-07-03,11,12,13,9,0,0,0,0,0,0",
+                ["2025-07-03", "9", "10", "11", "8", "0"],
+                ["2026-07-03", "11", "12", "13", "9", "0"],
             ]
-        return httpx.Response(200, json={"data": {"klines": lines}}, request=request)
+            key = "qfqday"
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {symbol: {key: lines}}},
+            request=request,
+        )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ValueError, match="24-month start boundary"):
@@ -196,11 +211,13 @@ def test_market_history_paces_all_six_eastmoney_requests():
 
     def handler(request):
         lines = [
-            "2024-07-03,9,10,11,8,0,0,0,0,0,0",
-            "2025-07-03,10,11,12,9,0,0,0,0,0,0",
-            "2026-07-03,11,12,13,9,0,0,0,0,0,0",
+            ["2024-07-03", "9", "10", "11", "8", "0"],
+            ["2025-07-03", "10", "11", "12", "9", "0"],
+            ["2026-07-03", "11", "12", "13", "9", "0"],
         ]
-        return httpx.Response(200, json={"data": {"klines": lines}}, request=request)
+        symbol, _kind, _begin, _end, _count, adjustment = request.url.params["param"].split(",")
+        key = "qfqday" if adjustment else "day"
+        return httpx.Response(200, json={"code": 0, "data": {symbol: {key: lines}}}, request=request)
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         market_history(
@@ -228,7 +245,7 @@ def test_fetch_market_series_retries_disconnect_with_cooldown_and_context():
             fetch_market_series(
                 client,
                 instrument=MarketInstrument(
-                    stock_code="000938", display_name="UNIS", eastmoney_secid="0.000938", kind="target"
+                    stock_code="000938", display_name="UNIS", eastmoney_secid="0.000938", kind="target", exchange_suffix="SZ"
                 ),
                 start_date=date(2024, 7, 3),
                 end_date=date(2026, 7, 3),
@@ -238,3 +255,92 @@ def test_fetch_market_series_retries_disconnect_with_cooldown_and_context():
             )
     assert attempts == 3
     assert waits == [1.0, 2.0]
+
+
+def test_fetch_market_series_rejects_implicit_non_shanghai_mapping():
+    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail("network must not be called"))) as client:
+        with pytest.raises(ValueError, match="exchange_suffix is required"):
+            fetch_market_series(
+                client,
+                instrument=MarketInstrument(
+                    stock_code="899050",
+                    display_name="Beijing Stock Exchange 50 Index",
+                    eastmoney_secid="0.899050",
+                    kind="benchmark",
+                ),
+                start_date=date(2026, 9, 1),
+                end_date=date(2026, 9, 19),
+                adjustment="forward_adjusted",
+                retry_delays=(),
+            )
+
+
+def test_fetch_market_series_uses_explicit_beijing_prefix():
+    symbols = []
+
+    def handler(request):
+        symbol = request.url.params["param"].split(",", 1)[0]
+        symbols.append(symbol)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {symbol: {"qfqday": [["2026-09-01", "9", "10", "11", "8", "0"]]}},
+            },
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        fetch_market_series(
+            client,
+            instrument=MarketInstrument(
+                stock_code="899050",
+                display_name="Beijing Stock Exchange 50 Index",
+                eastmoney_secid="0.899050",
+                kind="benchmark",
+                exchange_suffix="BJ",
+            ),
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 9, 1),
+            adjustment="forward_adjusted",
+            retry_delays=(),
+        )
+
+    assert symbols == ["bj899050"]
+
+
+def test_fetch_market_series_accepts_tencent_day_key_for_unadjustable_index():
+    def handler(request):
+        symbol = request.url.params["param"].split(",", 1)[0]
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    symbol: {
+                        "day": [["2024-07-03", "9", "10", "11", "8", "0"]]
+                    }
+                },
+            },
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        series = fetch_market_series(
+            client,
+            instrument=MarketInstrument(
+                stock_code="399001",
+                display_name="Shenzhen Component Index",
+                eastmoney_secid="0.399001",
+                kind="benchmark",
+                exchange_suffix="SZ",
+            ),
+            start_date=date(2024, 7, 3),
+            end_date=date(2024, 7, 3),
+            adjustment="forward_adjusted",
+            retry_delays=(),
+            sleeper=lambda _: None,
+        )
+
+    assert series.adjustment == "forward_adjusted"
+    assert series.points[0].close == Decimal("10")

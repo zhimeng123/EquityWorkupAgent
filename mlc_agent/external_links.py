@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -13,6 +14,7 @@ from mlc_agent.schemas import CompanyIdentity, SourceValue, WorkupAgentState
 GoogleExchange = Literal["SHE", "SHA"]
 CNINFO_COMPANY_BASE_URL = "https://www.cninfo.com.cn/new/disclosure/stock"
 CNINFO_COMPANY_SEARCH_URL = "https://www.cninfo.com.cn/new/information/topSearch/query"
+CNINFO_SZ_ORG_ID_PREFIX = "gssz"
 GOOGLE_FINANCE_BASE_URL = "https://www.google.com/finance/quote"
 
 
@@ -63,6 +65,45 @@ def build_cninfo_company_url(*, stock_code: str, org_id: str) -> str:
     if not normalized_org_id:
         raise ValueError("CNINFO org_id is required")
     return f"{CNINFO_COMPANY_BASE_URL}?{urlencode({'orgId': normalized_org_id, 'stockCode': stock_code})}"
+
+
+def derive_cninfo_sz_org_id(company: CompanyIdentity) -> str:
+    """Derive the published CNINFO orgId form for a Shenzhen listing.
+
+    CNINFO's public Shenzhen company pages use ``gssz`` followed by the
+    seven-digit, zero-padded security code.  This is only a Shenzhen rule;
+    other markets must continue using an orgId obtained from CNINFO itself.
+    """
+    suffix = company.eastmoney_secu_code.rsplit(".", 1)[-1].upper()
+    if suffix != "SZ":
+        raise ValueError("CNINFO Shenzhen orgId derivation requires an SZ listing")
+    if not re.fullmatch(r"\d{6}", company.stock_code):
+        raise ValueError(f"invalid six-digit Shenzhen stock code: {company.stock_code}")
+    return f"{CNINFO_SZ_ORG_ID_PREFIX}0{company.stock_code}"
+
+
+def validate_constructed_cninfo_company_url(company: CompanyIdentity) -> str:
+    """Validate a deterministic Shenzhen CNINFO URL without topSearch.
+
+    The validation is intentionally local: the URL's host, path, stockCode,
+    and derived orgId must all match the company identity.  CNINFO may reject
+    automated HTTP requests with 403 even when the canonical company page is
+    valid, so a remote request would make this link field depend on an
+    unrelated anti-bot response.
+    """
+    org_id = derive_cninfo_sz_org_id(company)
+    url = build_cninfo_company_url(stock_code=company.stock_code, org_id=org_id)
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.lower() != "www.cninfo.com.cn"
+        or parsed.path != "/new/disclosure/stock"
+        or query.get("stockCode") != [company.stock_code]
+        or query.get("orgId") != [org_id]
+    ):
+        raise ValueError(f"constructed CNINFO URL does not match {company.stock_code}")
+    return url
 
 
 def discover_cninfo_org_id(
@@ -144,16 +185,18 @@ def collect_external_links(
     except (httpx.HTTPError, ValueError) as exc:
         errors.append(f"google_finance_url: {exc}")
     try:
-        verified_org_id = (
-            cninfo_org_id.strip()
-            if cninfo_org_id and cninfo_org_id.strip()
-            else discover_cninfo_org_id(client, company)
-        )
-        cninfo_url = validate_cninfo_company_url(
-            client,
-            company,
-            org_id=verified_org_id,
-        )
+        if cninfo_org_id and cninfo_org_id.strip():
+            verified_org_id = cninfo_org_id.strip()
+            cninfo_url = validate_cninfo_company_url(client, company, org_id=verified_org_id)
+            validation = "HTTP company page matched stockCode and orgId"
+        elif company.eastmoney_secu_code.rsplit(".", 1)[-1].upper() == "SZ":
+            verified_org_id = derive_cninfo_sz_org_id(company)
+            cninfo_url = validate_constructed_cninfo_company_url(company)
+            validation = "canonical CNINFO Shenzhen orgId matched stockCode and URL"
+        else:
+            verified_org_id = discover_cninfo_org_id(client, company)
+            cninfo_url = validate_cninfo_company_url(client, company, org_id=verified_org_id)
+            validation = "HTTP company page matched stockCode and orgId"
         values.append(
             SourceValue(
                 field_id="cninfo_company_url",
@@ -162,7 +205,7 @@ def collect_external_links(
                 source="cninfo",
                 source_url=cninfo_url,
                 captured_at=captured_at,
-                metadata={"validation": "HTTP company page matched stockCode and orgId"},
+                metadata={"validation": validation},
             )
         )
     except (httpx.HTTPError, ValueError) as exc:

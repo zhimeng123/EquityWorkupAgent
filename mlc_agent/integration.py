@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from openai import OpenAI
 
-from mlc_agent.audit_changes import Part11Input, collect_part11
+from mlc_agent.audit_changes import Part11Input, collect_part11, collect_part11_groups
 from mlc_agent.charts import stock_chart_node
 from mlc_agent.company_supplement import (
     EvidenceDocument as Part01Document,
@@ -120,12 +120,17 @@ def _append_result(
     artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     part_results = dict(state.get("part_results", {}))
+    raw_result = dict(raw_result)
+    status = raw_result.get("status")
+    if status not in {"completed", "partial", "failed"}:
+        status = "failed" if errors and not source_values else "partial" if errors else "completed"
+        raw_result["status"] = status
     part_results[part] = raw_result
     plan = [dict(item) for item in state.get("execution_plan", [])]
     for item in plan:
         if item["step_id"] == part:
-            item["status"] = "failed" if raw_result.get("status") == "failed" else "completed"
-            item["detail"] = raw_result.get("reason") or f"{len(source_values)} field candidates"
+            item["status"] = status
+            item["detail"] = raw_result.get("reason") or "; ".join(errors) or f"{len(source_values)} field candidates"
             break
     return {
         "part_results": part_results,
@@ -159,19 +164,33 @@ def collect_shared_disclosures_node(state: WorkupAgentState) -> dict[str, Any]:
                 run_dir=Path(state["run_dir"]),
             )
         part_results = dict(state.get("part_results", {}))
-        part_results["shared_disclosures"] = result.model_dump(mode="json")
+        serialized = result.model_dump(mode="json")
+        if result.documents:
+            status = "partial" if result.errors else "completed"
+            fatal_errors: list[str] = []
+            detail = f"{len(result.documents)} parsed disclosures"
+            if result.errors:
+                detail += f"; {len(result.errors)} non-fatal disclosure errors"
+        else:
+            status = "failed"
+            reason = "; ".join(result.errors) or "shared disclosures produced no usable parsed documents"
+            serialized["reason"] = reason
+            fatal_errors = [reason]
+            detail = reason
+        serialized["status"] = status
+        part_results["shared_disclosures"] = serialized
         return {
             "part_results": part_results,
             "report_catalog": [item.model_dump(mode="json") for item in result.announcement_catalog],
             "announcement_catalog": [item.model_dump(mode="json") for item in result.announcement_catalog],
             "node_errors": list(state.get("node_errors", []))
-            + [{"node": "shared_disclosures", "message": item} for item in result.errors],
+            + [{"node": "shared_disclosures", "message": item} for item in fatal_errors],
             "execution_plan": [
                 {
                     **item,
-                    "status": "completed" if item["step_id"] == "shared_disclosures" else item["status"],
+                    "status": status if item["step_id"] == "shared_disclosures" else item["status"],
                     "detail": (
-                        f"{len(result.documents)} parsed disclosures"
+                        detail
                         if item["step_id"] == "shared_disclosures"
                         else item.get("detail")
                     ),
@@ -221,12 +240,16 @@ def part01_node(state: WorkupAgentState) -> dict[str, Any]:
 
 def part02_node(state: WorkupAgentState) -> dict[str, Any]:
     try:
-        bundle = _bundle(state)
+        bundle = None
+        try:
+            bundle = _bundle(state)
+        except (TypeError, ValueError):
+            pass
         with build_http_client() as client:
             result = collect_external_links(
                 client,
                 company=CompanyIdentity.model_validate(state["company"]),
-                cninfo_org_id=bundle.org_id,
+                cninfo_org_id=bundle.org_id if bundle else None,
                 captured_at=datetime.fromisoformat(state["created_at"]),
             )
         return _append_result(
@@ -309,19 +332,15 @@ def part05_node(state: WorkupAgentState) -> dict[str, Any]:
     # extraction fills an independent report field and must not invalidate that
     # already-completed contract when its LLM request fails.
     try:
-        bundle = _bundle(state)
         with build_http_client(timeout_seconds=60) as client:
             target, candidates, identities = collect_fixed_peer_companies(
                 client,
                 target=CompanyIdentity.model_validate(state["company"]),
                 config_dir=Path(state["config_dir"]),
             )
-        canonical_annual = [
-            FinancialPeriodRecord.model_validate(item)
-            for item in state.get("part_results", {}).get("part_04", {}).get("annual_records", [])
-        ]
+        canonical_annual = [FinancialPeriodRecord.model_validate(item) for item in target.annual_records]
         if len(canonical_annual) < 2:
-            raise ValueError("Part 04 did not provide two canonical annual records for Part 05")
+            raise ValueError("Part 05 target financial collection did not provide two annual records")
         target = target.model_copy(update={"annual_records": canonical_annual})
         result = collect_peer_analysis(
             target=target,
@@ -349,6 +368,7 @@ def part05_node(state: WorkupAgentState) -> dict[str, Any]:
 
     errors: list[str] = []
     try:
+        bundle = _bundle(state)
         related_transactions = extract_part05_related_party_transactions(
             _llm_client(),
             model=get_llm_model(),
@@ -483,7 +503,6 @@ def part07_node(state: WorkupAgentState) -> dict[str, Any]:
 
 def part08_node(state: WorkupAgentState) -> dict[str, Any]:
     try:
-        bundle = _bundle(state)
         part05 = state.get("part_results", {}).get("part_05", {})
         if part05.get("peer_analysis_status") != "completed":
             raise ValueError(
@@ -492,41 +511,60 @@ def part08_node(state: WorkupAgentState) -> dict[str, Any]:
         peer_identities = [CompanyIdentity.model_validate(item) for item in part05.get("selected_identities", [])]
         if len(peer_identities) != 3:
             raise ValueError("Part 05 did not provide exactly three selected peer identities")
-        extraction = extract_pydantic(
-            _llm_client(), model=get_llm_model(), output_model=Part08Extraction,
-            system_prompt="Extract IPO evidence and every securities offering in the exact rolling 12-month announcement window.",
-            payload={
-                "as_of": _as_of(state),
-                "catalog_source_url": build_cninfo_company_url(
-                    stock_code=state["company"]["stock_code"],
-                    org_id=bundle.org_id,
-                ),
-                "structured_ipo_candidate": {
-                    "listing_date": state.get("eastmoney_data", {}).get("profile", {}).get("LISTING_DATE"),
-                    "source_url": build_eastmoney_url(
-                        CompanyIdentity.model_validate(state["company"])
+
+        history = None
+        market_error = None
+        try:
+            with build_http_client(timeout_seconds=60) as client:
+                history = market_history(
+                    client,
+                    target=CompanyIdentity.model_validate(state["company"]),
+                    peers=peer_identities,
+                    as_of=_as_of(state),
+                )
+        except Exception as exc:
+            market_error = f"market_history: {exc}"
+
+        extraction = None
+        extraction_error = None
+        try:
+            bundle = _bundle(state)
+            extraction = extract_pydantic(
+                _llm_client(), model=get_llm_model(), output_model=Part08Extraction,
+                system_prompt="Extract IPO evidence and every securities offering in the exact rolling 12-month announcement window.",
+                payload={
+                    "as_of": _as_of(state),
+                    "catalog_source_url": (
+                        bundle.catalog_source_url
+                        or build_cninfo_company_url(
+                            stock_code=state["company"]["stock_code"],
+                            org_id=bundle.org_id,
+                        )
+                    ),
+                    "structured_ipo_candidate": {
+                        "listing_date": state.get("eastmoney_data", {}).get("profile", {}).get("LISTING_DATE"),
+                        "source_url": build_eastmoney_url(
+                            CompanyIdentity.model_validate(state["company"])
+                        ),
+                    },
+                    "documents": filtered_disclosure_payload(
+                        bundle,
+                        title_pattern=_PART08_TITLES,
+                        page_pattern=_PART08_PAGES,
                     ),
                 },
-                "documents": filtered_disclosure_payload(
-                    bundle,
-                    title_pattern=_PART08_TITLES,
-                    page_pattern=_PART08_PAGES,
-                ),
-            },
-        )
-        with build_http_client(timeout_seconds=60) as client:
-            history = market_history(
-                client,
-                target=CompanyIdentity.model_validate(state["company"]),
-                peers=peer_identities,
-                as_of=_as_of(state),
             )
+        except Exception as exc:
+            extraction_error = f"ipo_offerings: {exc}"
+
         result = collect_security_analysis(
             market=history,
-            ipo_candidates=extraction.ipo_candidates,
-            offering_review=extraction.offering_review,
+            ipo_candidates=extraction.ipo_candidates if extraction else [],
+            offering_review=extraction.offering_review if extraction else None,
             as_of=_as_of(state),
             captured_at=datetime.fromisoformat(state["created_at"]),
+            extraction_error=extraction_error,
+            market_error=market_error,
         )
         return _append_result(state, part="part_08", raw_result=result.model_dump(mode="json"), source_values=result.source_values, errors=result.errors)
     except Exception as exc:
@@ -537,10 +575,16 @@ def part09_node(state: WorkupAgentState) -> dict[str, Any]:
     output = stock_chart_node(state)
     result = output.get("part_results", {}).get("part_09", {})
     errors = result.get("errors", []) if isinstance(result, dict) else []
+    status = "failed" if errors and not result.get("source_values") else "partial" if errors else "completed"
+    if isinstance(result, dict):
+        output["part_results"] = {
+            **output.get("part_results", {}),
+            "part_09": {**result, "status": status},
+        }
     plan = [dict(item) for item in state.get("execution_plan", [])]
     for item in plan:
         if item["step_id"] == "part_09":
-            item["status"] = "failed" if errors else "completed"
+            item["status"] = status
             item["detail"] = (
                 "; ".join(str(error.get("reason")) for error in errors)
                 if errors
@@ -651,22 +695,6 @@ def part11_node(state: WorkupAgentState) -> dict[str, Any]:
                 )
             except Exception as exc:
                 group_errors.append(f"{group}: {exc}")
-        if group_errors:
-            # Preserve successful isolated group outputs; never invent required data
-            # merely to force the aggregate Part11Input through validation.
-            return _append_result(
-                state,
-                part="part_11",
-                raw_result={
-                    "status": "partial",
-                    "groups": {key: value.model_dump(mode="json") for key, value in extracted.items()},
-                    "failed_groups": group_errors,
-                },
-                source_values=[],
-                errors=group_errors,
-            )
-        audit = extracted["audit"]
-        news_result = extracted["news"]
         documents = evidence_text_documents(
             bundle, document_types={"annual_report"}, page_pattern=_PART11_PAGES
         )
@@ -674,6 +702,49 @@ def part11_node(state: WorkupAgentState) -> dict[str, Any]:
             bundle, document_types={"announcement"},
             title_pattern=_PART11_TITLES, page_pattern=_PART11_PAGES,
         )
+        if group_errors:
+            group_attributes = {
+                "audit": "latest_audit",
+                "restatements": "restatements",
+                "board_changes": "board_officer_changes",
+                "business_changes": "business_operation_changes",
+                "shareholder_changes": "top3_shareholder_changes",
+                "litigation": "litigation",
+                "regulatory": "regulatory",
+                "news": "news_articles",
+            }
+            collectible_groups = {
+                group for group, attribute in group_attributes.items()
+                if group in extracted and hasattr(extracted[group], attribute)
+            }
+            isolated = collect_part11_groups(
+                documents=documents,
+                matter_documents=matter_documents,
+                extracted=extracted,
+                groups=collectible_groups,
+                company_name=state["company"]["company_name"],
+                as_of=_as_of(state),
+                captured_at=datetime.fromisoformat(state["created_at"]),
+                artifact_dir=Path(state["run_dir"]),
+            )
+            status = "partial" if extracted else "failed"
+            return _append_result(
+                state,
+                part="part_11",
+                raw_result={
+                    "status": status,
+                    "groups": {key: value.model_dump(mode="json") for key, value in extracted.items()},
+                    "failed_groups": group_errors,
+                    "collection_errors": [item.model_dump(mode="json") for item in isolated.errors],
+                },
+                source_values=isolated.source_values,
+                errors=group_errors + [
+                    f"{item.field_id}: {item.reason}" for item in isolated.errors
+                ],
+                artifacts=[item.model_dump(mode="json") for item in isolated.artifacts],
+            )
+        audit = extracted["audit"]
+        news_result = extracted["news"]
         data = Part11Input(
             documents=documents,
             matter_documents=matter_documents,
@@ -695,8 +766,14 @@ def part11_node(state: WorkupAgentState) -> dict[str, Any]:
             captured_at=datetime.fromisoformat(state["created_at"]),
             artifact_dir=Path(state["run_dir"]),
         )
+        raw_result = result.model_dump(mode="json")
+        raw_result["status"] = (
+            "completed" if not result.errors
+            else "partial" if result.source_values
+            else "failed"
+        )
         return _append_result(
-            state, part="part_11", raw_result=result.model_dump(mode="json"),
+            state, part="part_11", raw_result=raw_result,
             source_values=result.source_values,
             errors=[f"{item.field_id}: {item.reason}" for item in result.errors],
             artifacts=[item.model_dump(mode="json") for item in result.artifacts],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ from mlc_agent.exceptions import DataSourceError
 
 CNINFO_QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 CNINFO_STATIC_BASE_URL = "https://static.cninfo.com.cn/"
+CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class AnnouncementDocument(BaseModel):
@@ -21,6 +23,7 @@ class AnnouncementDocument(BaseModel):
     url: str
     document_type: Literal["annual_report", "interim_report", "announcement"]
     report_year: int | None = None
+    source: Literal["cninfo", "exchange"] = "cninfo"
 
 
 class ReportCatalog(BaseModel):
@@ -41,11 +44,20 @@ def _classify_title(title: str) -> tuple[str, int | None]:
     for token in compact.split("年", 1)[:1]:
         if len(token) >= 4 and token[-4:].isdigit():
             year = int(token[-4:])
-    if "年度报告" in compact and "摘要" not in compact:
-        return "annual_report", year
     if ("半年度报告" in compact or "中期报告" in compact) and "摘要" not in compact:
         return "interim_report", year
+    if "年度报告" in compact and "摘要" not in compact:
+        return "annual_report", year
     return "announcement", year
+
+
+def _row_matches_stock(row: dict[str, Any], stock_code: str) -> bool:
+    value = row.get("secCode")
+    if value in (None, ""):
+        return True
+    if isinstance(value, list):
+        return stock_code in {str(item).strip() for item in value}
+    return str(value).strip() == stock_code
 
 
 def fetch_company_announcements(
@@ -88,6 +100,8 @@ def fetch_company_announcements(
         if not isinstance(rows, list):
             raise DataSourceError("CNINFO response announcements is not a list")
         for row in rows:
+            if not isinstance(row, dict) or not _row_matches_stock(row, stock_code):
+                continue
             adjunct = str(row.get("adjunctUrl") or "").lstrip("/")
             if not adjunct:
                 continue
@@ -101,7 +115,9 @@ def fetch_company_announcements(
                     announcement_id=str(row.get("announcementId") or adjunct),
                     stock_code=str(row.get("secCode") or stock_code),
                     title=title,
-                    published_at=datetime.fromtimestamp(timestamp / 1000),
+                    published_at=datetime.fromtimestamp(
+                        timestamp / 1000, tz=CHINA_TIMEZONE
+                    ).replace(tzinfo=None),
                     url=CNINFO_STATIC_BASE_URL + adjunct,
                     document_type=document_type,
                     report_year=report_year,
@@ -168,5 +184,5 @@ def download_announcement(client: httpx.Client, document: AnnouncementDocument) 
     response.raise_for_status()
     content = response.content
     if not content:
-        raise DataSourceError(f"CNINFO document is empty: {document.url}")
+        raise DataSourceError(f"{document.source.upper()} document is empty: {document.url}")
     return content

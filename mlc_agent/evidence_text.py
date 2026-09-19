@@ -9,28 +9,61 @@ from typing import Any
 def normalize_evidence_text(value: str) -> str:
     """Normalize Unicode and whitespace only; preserve every non-whitespace character."""
     normalized = unicodedata.normalize("NFKC", value)
-    return re.sub(r"\s+", " ", normalized).strip()
+    return re.sub(r"\s+", "", normalized)
 
 
 def contains_normalized_evidence(document_text: str, evidence_text: str) -> bool:
     return normalize_evidence_text(evidence_text) in normalize_evidence_text(document_text)
 
 
-def _page_texts(document: dict[str, Any]) -> dict[int, str]:
-    if isinstance(document.get("pages"), list):
-        return {int(p["page_number"]): str(p.get("text") or "") for p in document["pages"] if p.get("page_number") is not None}
+def _table_rows(table: Any) -> list[list[Any]]:
+    if isinstance(table, dict):
+        rows = table.get("rows")
+    else:
+        rows = table
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, list)]
+
+
+def _page_sources(page: dict[str, Any]) -> list[str]:
+    sources: list[str] = []
+    text = str(page.get("text") or "")
+    if text:
+        sources.append(text)
+    for table in page.get("tables", []) or []:
+        for row in _table_rows(table):
+            sources.append("\t".join(str(cell or "") for cell in row))
+    return sources
+
+
+def _page_texts(document: dict[str, Any]) -> dict[int, list[str]]:
+    if isinstance(document.get("pages"), list) and document["pages"]:
+        return {
+            int(page["page_number"]): _page_sources(page)
+            for page in document["pages"]
+            if isinstance(page, dict) and page.get("page_number") is not None
+        }
     text = str(document.get("text") or "")
     matches = list(re.finditer(r"\[Page (\d+)\]\s*", text))
     if not matches:
-        return {1: text}
-    return {int(m.group(1)): text[m.end(): matches[i + 1].start() if i + 1 < len(matches) else len(text)] for i, m in enumerate(matches)}
+        return {1: [text]}
+    return {
+        int(match.group(1)): [
+            text[match.end(): matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+        ]
+        for index, match in enumerate(matches)
+    }
 
 
-def _contiguous_candidates(page_text: str) -> list[str]:
-    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+def _contiguous_candidates(source: str) -> list[str]:
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
     candidates = list(lines)
-    for line in lines:
-        candidates.extend(item.strip() for item in re.split(r"(?<=[。！？；.!?;])", line) if item.strip())
+    candidates.extend(
+        item.strip()
+        for item in re.split(r"(?<=[。！？；.!?;])", source)
+        if item.strip()
+    )
     return list(dict.fromkeys(candidates))
 
 
@@ -55,19 +88,20 @@ def anchor_extracted_evidence(output: Any, documents: list[dict[str, Any]]) -> A
                 raw_hint = str(value.get("evidence_text") or "")
                 hint = normalize_evidence_text(raw_hint)
                 matches: list[tuple[int, int, int, int, str]] = []
-                for actual_page, page_text in pages.items():
-                    candidates = _contiguous_candidates(page_text)
-                    for candidate in candidates:
-                        normalized = normalize_evidence_text(candidate)
-                        if not hint or hint not in normalized:
-                            continue
-                        matches.append((
-                            int(hint == normalized),
-                            int(page_number is not None and actual_page == int(page_number)),
-                            -len(candidate),
-                            -actual_page,
-                            candidate,
-                        ))
+                for actual_page, page_sources in pages.items():
+                    for source in page_sources:
+                        candidates = _contiguous_candidates(source)
+                        for candidate in candidates:
+                            normalized = normalize_evidence_text(candidate)
+                            if not hint or hint not in normalized:
+                                continue
+                            matches.append((
+                                int(hint == normalized),
+                                int(page_number is not None and actual_page == int(page_number)),
+                                -len(candidate),
+                                -actual_page,
+                                candidate,
+                            ))
                 if not matches:
                     raise ValueError(f"evidence fact could not be anchored in supplied pages: {url}")
                 best = max(matches)

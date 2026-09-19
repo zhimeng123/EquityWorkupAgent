@@ -289,6 +289,7 @@ def test_shared_announcement_is_exposed_as_cninfo_evidence():
     assert evidence["source"] == "cninfo"
     assert evidence["source_url"] == document.url
     assert "[Page 1]" in evidence["text"]
+    assert evidence["pages"] == [{"page_number": 1, "text": "董事变更", "tables": []}]
 
 
 def test_report_only_evidence_excludes_cninfo_announcements():
@@ -509,6 +510,7 @@ def test_shared_disclosures_limit_keyword_announcements_to_rolling_twelve_months
     downloaded = []
     monkeypatch.setattr("mlc_agent.production_adapters.discover_cninfo_org_id", lambda *_: "org")
     monkeypatch.setattr("mlc_agent.production_adapters.fetch_company_announcements", lambda *args, **kwargs: documents)
+    monkeypatch.setattr("mlc_agent.production_adapters.fetch_szse_announcements", lambda *args, **kwargs: documents)
     monkeypatch.setattr(
         "mlc_agent.production_adapters.download_announcement",
         lambda client, item: downloaded.append(item.announcement_id) or b"pdf",
@@ -523,6 +525,22 @@ def test_shared_disclosures_limit_keyword_announcements_to_rolling_twelve_months
     )
 
     assert downloaded == ["annual-2025", "annual-2024", "interim", "recent-notice"]
+
+
+def test_shared_disclosures_uses_exact_three_year_calendar_boundary(monkeypatch, tmp_path):
+    captured = {}
+
+    def fetch(*args, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("mlc_agent.production_adapters.fetch_szse_announcements", fetch)
+
+    collect_shared_disclosures(
+        object(), company=_company(), as_of=date(2026, 1, 31), run_dir=tmp_path
+    )
+
+    assert captured["start_date"] == date(2023, 1, 31)
 
 
 def test_fixed_peer_production_adapter_fetches_only_configured_companies(monkeypatch, tmp_path):

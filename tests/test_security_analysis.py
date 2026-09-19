@@ -290,9 +290,9 @@ def test_node_controls_market_data_failure_without_losing_existing_values():
     assert result["source_values"] == [existing]
     assert result["part_results"]["part_08"] == {
         "status": "failed",
-        "reason": "market_history: no market history for 000938",
+        "reason": "market_history: Tencent market history returned an invalid result for 000938",
     }
     assert result["node_errors"][-1] == {
         "node": "part_08",
-        "message": "market_history: no market history for 000938",
+        "message": "market_history: Tencent market history returned an invalid result for 000938",
     }

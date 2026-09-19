@@ -56,6 +56,7 @@ from mlc_agent.schemas import CompanyIdentity
 from mlc_agent.security_analysis import IpoEvidence, SecuritiesOfferingReview
 from mlc_agent.evidence_text import anchor_extracted_evidence
 from mlc_agent.fixed_peers import load_fixed_peers
+from mlc_agent.szse import SZSE_ANNOUNCEMENT_PAGE_URL, fetch_szse_announcements
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -67,10 +68,12 @@ class ParsedDisclosure(BaseModel):
 
 
 class SharedDisclosureBundle(BaseModel):
-    org_id: str
+    org_id: str | None = None
     documents: list[ParsedDisclosure]
     announcement_catalog: list[AnnouncementDocument]
     errors: list[str] = Field(default_factory=list)
+    catalog_source: Literal["cninfo", "exchange"] = "cninfo"
+    catalog_source_url: str | None = None
 
 
 class Part05Extraction(BaseModel):
@@ -189,17 +192,37 @@ def collect_shared_disclosures(
     as_of: date,
     run_dir: Path,
 ) -> SharedDisclosureBundle:
-    org_id = discover_cninfo_org_id(client, company)
-    start = date(as_of.year - 3, as_of.month, min(as_of.day, 28))
-    catalog_items = fetch_company_announcements(
-        client,
-        stock_code=company.stock_code,
-        org_id=org_id,
-        start_date=start,
-        end_date=as_of,
-        page_size=30,
-        column=_column(company),  # type: ignore[arg-type]
+    start_year = as_of.year - 3
+    start = date(
+        start_year,
+        as_of.month,
+        min(as_of.day, calendar.monthrange(start_year, as_of.month)[1]),
     )
+    suffix = company.eastmoney_secu_code.rsplit(".", 1)[-1].upper()
+    if suffix == "SZ":
+        org_id = None
+        catalog_source = "exchange"
+        catalog_source_url = SZSE_ANNOUNCEMENT_PAGE_URL
+        catalog_items = fetch_szse_announcements(
+            client,
+            stock_code=company.stock_code,
+            start_date=start,
+            end_date=as_of,
+            page_size=30,
+        )
+    else:
+        org_id = discover_cninfo_org_id(client, company)
+        catalog_source = "cninfo"
+        catalog_source_url = None
+        catalog_items = fetch_company_announcements(
+            client,
+            stock_code=company.stock_code,
+            org_id=org_id,
+            start_date=start,
+            end_date=as_of,
+            page_size=30,
+            column=_column(company),  # type: ignore[arg-type]
+        )
     catalog = build_report_catalog(catalog_items)
     announcement_cutoff = date(
         as_of.year - 1,
@@ -240,6 +263,8 @@ def collect_shared_disclosures(
         documents=parsed_documents,
         announcement_catalog=catalog_items,
         errors=errors,
+        catalog_source=catalog_source,
+        catalog_source_url=catalog_source_url,
     )
 
 
@@ -281,7 +306,7 @@ def part05_related_party_payloads(
     document = report.document
     for block_name, start_pattern, end_pattern, include_end_page in block_specs:
         start = next(
-            (index for index, page in enumerate(report.parsed.pages) if start_pattern.search(page.text)),
+            (index for index, page in enumerate(report.parsed.pages) if start_pattern.search(_page_search_text(page))),
             None,
         )
         if start is None:
@@ -290,7 +315,7 @@ def part05_related_party_payloads(
             (
                 index
                 for index, page in enumerate(report.parsed.pages[start + 1 :], start=start + 1)
-                if end_pattern.search(page.text)
+                if end_pattern.search(_page_search_text(page))
             ),
             len(report.parsed.pages),
         )
@@ -341,7 +366,7 @@ def filtered_disclosure_payload(
         matching = {
             index
             for index, page in enumerate(item.parsed.pages)
-            if page_pattern.search(page.text)
+            if page_pattern.search(_page_search_text(page))
         }
         selected = {
             neighbor
@@ -353,24 +378,44 @@ def filtered_disclosure_payload(
     return [
         {
             "source": (
-                "cninfo" if item.document.document_type == "announcement" else item.document.document_type
+                item.document.source
+                if item.document.document_type == "announcement"
+                else item.document.document_type
             ),
             "title": item.document.title,
             "source_url": item.document.url,
             "published_at": item.document.published_at.isoformat(),
             "report_year": item.document.report_year,
             "pages": [
-                {
-                    "page_number": page.page_number,
-                    "text": page.text,
-                    "tables": [table.rows for table in page.tables],
-                }
+                _page_payload(page)
                 for page in selected_pages(item)
             ],
         }
         for item in documents
-        if page_pattern is None or any(page_pattern.search(page.text) for page in item.parsed.pages)
+        if page_pattern is None or any(page_pattern.search(_page_search_text(page)) for page in item.parsed.pages)
     ]
+
+
+def _page_payload(page: Any) -> dict[str, Any]:
+    return {
+        "page_number": page.page_number,
+        "text": page.text,
+        "tables": [table.rows for table in page.tables],
+    }
+
+
+def _page_search_text(page: Any) -> str:
+    parts = [page.text]
+    for table in page.tables:
+        parts.extend("\t".join(str(cell or "") for cell in row) for row in table.rows)
+    return "\n".join(part for part in parts if part)
+
+
+def _page_evidence_text(page: Any) -> str:
+    parts = [page.text]
+    for table in page.tables:
+        parts.extend("\t".join(str(cell or "") for cell in row) for row in table.rows)
+    return "\n".join(part for part in parts if part)
 
 
 def evidence_text_documents(
@@ -403,7 +448,7 @@ def evidence_text_documents(
         matching = {
             index
             for index, page in enumerate(item.parsed.pages)
-            if page_pattern.search(page.text)
+            if page_pattern.search(_page_search_text(page))
         }
         selected = {
             neighbor
@@ -415,7 +460,9 @@ def evidence_text_documents(
     return [
         {
             "source": (
-                "cninfo" if item.document.document_type == "announcement" else item.document.document_type
+                item.document.source
+                if item.document.document_type == "announcement"
+                else item.document.document_type
             ),
             "source_url": item.document.url,
             "disclosure_date": item.document.published_at.date().isoformat(),
@@ -424,13 +471,14 @@ def evidence_text_documents(
                 if item.document.report_year is not None
                 else item.document.published_at.date().isoformat()
             ),
+            "pages": [_page_payload(page) for page in selected_pages(item)],
             "text": "\n".join(
-                f"[Page {page.page_number}]\n{page.text}"
+                f"[Page {page.page_number}]\n{_page_evidence_text(page)}"
                 for page in selected_pages(item)
             ),
         }
         for item in documents
-        if page_pattern is None or any(page_pattern.search(page.text) for page in item.parsed.pages)
+        if page_pattern is None or any(page_pattern.search(_page_search_text(page)) for page in item.parsed.pages)
     ]
 
 
