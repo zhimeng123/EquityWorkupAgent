@@ -227,6 +227,46 @@ def test_part06_numeric_string_drops_only_bad_metric_and_preserves_other_metrics
     ]
 
 
+def _part06_latest_balance_output(monetary_funds, short_term_borrowings):
+    period = {
+        "report_date": "2025-12-31", "period_type": "annual", "fiscal_year": 2025,
+        "revenue": 1000, "parent_net_profit": 100, "currency": "CNY", "unit": "CNY",
+        "source_url": "https://example.test/annual",
+    }
+    def metric(field_id, value):
+        return {
+            "field_id": field_id, "value": value, "period": "2026Q1",
+            "currency": "CNY", "unit": "CNY", "source_url": "https://example.test/annual",
+        }
+    return {
+        "annual_inputs": [{"financial_period": period}],
+        "latest_balance": {
+            "period": "2026Q1",
+            "monetary_funds": metric("monetary_funds", monetary_funds),
+            "short_term_borrowings": metric("short_term_borrowings", short_term_borrowings),
+        },
+    }, {"annual_records": [period]}
+
+
+def test_part06_latest_balance_numeric_string_is_coerced_to_number():
+    output, payload = _part06_latest_balance_output("200", 300)
+    result = extract_pydantic(
+        _FakeLlm(output), model="test", output_model=Part06Extraction,
+        system_prompt="extract", payload=payload,
+    )
+    assert result.latest_balance.monetary_funds.value == Decimal("200")
+    assert result.validation_errors == []
+
+
+def test_part06_latest_balance_non_numeric_string_is_still_rejected():
+    output, payload = _part06_latest_balance_output("abc", 300)
+    with pytest.raises(ValueError, match="must be a JSON number, not a numeric string"):
+        extract_pydantic(
+            _FakeLlm(output), model="test", output_model=Part06Extraction,
+            system_prompt="extract", payload=payload,
+        )
+
+
 def test_part07_receivable_contract_requires_comparable_consecutive_years():
     def item(year, scope="group"):
         return {

@@ -560,6 +560,12 @@ def extract_pydantic(
                         f"annual_inputs[{index}].{name}.value must be a JSON number, not a numeric string"
                     )
                     annual[name] = None
+        latest_balance = raw.get("latest_balance")
+        if isinstance(latest_balance, dict):
+            for name in ("monetary_funds", "short_term_borrowings"):
+                metric = latest_balance.get(name)
+                if isinstance(metric, dict) and "value" in metric:
+                    metric["value"] = _coerce_numeric_string(metric["value"])
         raw["validation_errors"] = validation_errors
     _reject_decimal_strings(raw, output_model)
     # Strict JSON validation intentionally differs from strict Python validation:
@@ -648,6 +654,18 @@ def _inject_local_not_disclosed_coverage(
                 walk(child)
 
     walk(raw)
+
+
+def _coerce_numeric_string(value: Any) -> Any:
+    """Coerce a JSON numeric string to its int/float value; leave any other value unchanged."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return value
+        if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+            return parsed
+    return value
 
 
 def _reject_decimal_strings(value: Any, annotation: Any, path: str = "") -> None:
