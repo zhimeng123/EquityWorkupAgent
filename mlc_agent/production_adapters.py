@@ -178,6 +178,18 @@ class Part11NewsExtraction(BaseModel):
     news_articles: list[NewsArticle] = Field(default_factory=list)
 
 
+NUMERIC_COERCION_MODELS = frozenset({
+    Part05Extraction,
+    Part06Extraction,
+    Part07Extraction,
+    Part07ReceivablesExtraction,
+    Part08Extraction,
+    Part11LegalExtraction,
+    Part11LitigationExtraction,
+    Part11RegulatoryExtraction,
+})
+
+
 _RELEVANT_ANNOUNCEMENT = re.compile(
     r"收购|并购|重组|董事|监事|高管|股东|审计|会计师|更正|重述|诉讼|仲裁|处罚|监管|发行|配股|增发|可转债|减值"
 )
@@ -560,13 +572,9 @@ def extract_pydantic(
                         f"annual_inputs[{index}].{name}.value must be a JSON number, not a numeric string"
                     )
                     annual[name] = None
-        latest_balance = raw.get("latest_balance")
-        if isinstance(latest_balance, dict):
-            for name in ("monetary_funds", "short_term_borrowings"):
-                metric = latest_balance.get(name)
-                if isinstance(metric, dict) and "value" in metric:
-                    metric["value"] = _coerce_numeric_string(metric["value"])
         raw["validation_errors"] = validation_errors
+    if output_model in NUMERIC_COERCION_MODELS:
+        raw = _coerce_numeric_strings(raw, output_model)
     _reject_decimal_strings(raw, output_model)
     # Strict JSON validation intentionally differs from strict Python validation:
     # JSON dates and Decimal numbers are valid, while numeric strings remain invalid.
@@ -665,6 +673,37 @@ def _coerce_numeric_string(value: Any) -> Any:
             return value
         if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
             return parsed
+    return value
+
+
+def _coerce_numeric_strings(value: Any, annotation: Any, path: str = "") -> Any:
+    """Return ``value`` with numeric strings at Decimal positions replaced by JSON numbers.
+
+    Mirrors ``_reject_decimal_strings`` traversal but is annotation-aware: only strings
+    sitting exactly where a ``Decimal`` is expected are parsed.  Non-numeric strings are
+    left untouched so ``_reject_decimal_strings`` still raises for them.
+    """
+    if annotation is Decimal:
+        return _coerce_numeric_string(value)
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin in (list, tuple, set, frozenset) and isinstance(value, list) and args:
+        return [
+            _coerce_numeric_strings(item, args[0], f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if origin is not None and args:
+        for candidate in args:
+            if candidate is type(None):
+                continue
+            value = _coerce_numeric_strings(value, candidate, path)
+        return value
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
+        for name, field in annotation.model_fields.items():
+            if name in value:
+                value[name] = _coerce_numeric_strings(
+                    value[name], field.annotation, f"{path}.{name}".lstrip(".")
+                )
     return value
 
 

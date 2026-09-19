@@ -12,6 +12,7 @@ from mlc_agent.cninfo import AnnouncementDocument
 from mlc_agent.production_adapters import (
     ParsedDisclosure,
     Part06Extraction,
+    Part07Extraction,
     Part07ReceivablesExtraction,
     SharedDisclosureBundle,
     collect_shared_disclosures,
@@ -263,6 +264,69 @@ def test_part06_latest_balance_non_numeric_string_is_still_rejected():
     with pytest.raises(ValueError, match="must be a JSON number, not a numeric string"):
         extract_pydantic(
             _FakeLlm(output), model="test", output_model=Part06Extraction,
+            system_prompt="extract", payload=payload,
+        )
+
+
+def test_part06_annual_financial_period_revenue_numeric_string_is_coerced():
+    period = {
+        "report_date": "2025-12-31", "period_type": "annual", "fiscal_year": 2025,
+        "revenue": "1000", "parent_net_profit": 100, "currency": "CNY", "unit": "CNY",
+        "source_url": "https://example.test/annual",
+    }
+
+    def metric(field_id, value):
+        return {
+            "field_id": field_id, "value": value, "period": "2026Q1",
+            "currency": "CNY", "unit": "CNY", "source_url": "https://example.test/annual",
+        }
+
+    output = {
+        "annual_inputs": [{"financial_period": period}],
+        "latest_balance": {
+            "period": "2026Q1",
+            "monetary_funds": metric("monetary_funds", 200),
+            "short_term_borrowings": metric("short_term_borrowings", 300),
+        },
+    }
+    result = extract_pydantic(
+        _FakeLlm(output), model="test", output_model=Part06Extraction,
+        system_prompt="extract", payload={"annual_records": [period]},
+    )
+    assert result.annual_inputs[0].financial_period.revenue == Decimal("1000")
+    assert result.validation_errors == []
+
+
+def _part07_balance_sheet_output(accounts_receivable):
+    source_url = "https://example.test/annual"
+    return {
+        "balance_sheet_details": [{
+            "fiscal_year": 2025, "report_date": "2025-12-31",
+            "accounts_receivable": accounts_receivable, "accounts_receivable_gross": 1200,
+            "goodwill": 0, "intangible_assets": 0, "total_assets": 5000,
+            "currency": "CNY", "unit": "CNY", "consolidation_scope_id": "group",
+            "source_url": source_url, "page_number": 1,
+        }],
+        "impairment_components": [],
+    }, {"documents": [{
+        "source_url": source_url, "pages": [{"page_number": 1, "text": "annual balance sheet"}],
+    }]}
+
+
+def test_part07_balance_sheet_numeric_string_is_coerced():
+    output, payload = _part07_balance_sheet_output("1000")
+    result = extract_pydantic(
+        _FakeLlm(output), model="test", output_model=Part07Extraction,
+        system_prompt="extract", payload=payload,
+    )
+    assert result.balance_sheet_details[0].accounts_receivable == Decimal("1000")
+
+
+def test_part07_balance_sheet_non_numeric_string_is_still_rejected():
+    output, payload = _part07_balance_sheet_output("abc")
+    with pytest.raises(ValueError, match="must be a JSON number, not a numeric string"):
+        extract_pydantic(
+            _FakeLlm(output), model="test", output_model=Part07Extraction,
             system_prompt="extract", payload=payload,
         )
 
