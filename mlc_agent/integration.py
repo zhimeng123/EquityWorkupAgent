@@ -20,7 +20,14 @@ from mlc_agent.external_links import build_cninfo_company_url, collect_external_
 from mlc_agent.financial_metrics import collect_financial_metrics
 from mlc_agent.governance import GovernanceReportInput, collect_governance
 from mlc_agent.http_client import build_http_client
-from mlc_agent.llm import get_llm_api_key, get_llm_base_url, get_llm_model
+from mlc_agent.llm import (
+    chat_completion_text,
+    get_llm_api_key,
+    get_llm_base_url,
+    get_llm_max_retries,
+    get_llm_model,
+    get_llm_timeout,
+)
 from mlc_agent.operating_performance import (
     FinancialPeriodRecord,
     OutlookRiskItem,
@@ -97,7 +104,12 @@ def _as_of(state: WorkupAgentState) -> date:
 
 
 def _llm_client() -> OpenAI:
-    return OpenAI(api_key=get_llm_api_key(), base_url=get_llm_base_url(), timeout=60.0)
+    return OpenAI(
+        api_key=get_llm_api_key(),
+        base_url=get_llm_base_url(),
+        timeout=get_llm_timeout(),
+        max_retries=get_llm_max_retries(),
+    )
 
 
 def _bundle(state: WorkupAgentState) -> SharedDisclosureBundle:
@@ -292,12 +304,12 @@ def part03_node(state: WorkupAgentState) -> dict[str, Any]:
 
 def _outlook_renderer(client: OpenAI) -> Callable[[tuple[OutlookRiskItem, ...]], str]:
     def render(items: tuple[OutlookRiskItem, ...]) -> str:
-        response = client.chat.completions.create(
+        content = chat_completion_text(
+            client,
             model=get_llm_model(),
             messages=[{"role": "user", "content": build_outlook_english_prompt(items)}],
             temperature=0,
         )
-        content = response.choices[0].message.content
         if not content:
             raise ValueError("outlook English renderer returned empty text")
         return content

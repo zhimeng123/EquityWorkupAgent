@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from mlc_agent.schemas import DerivedEvidence, DerivedInput, ItemEvidence, SourceName, SourceValue
 from mlc_agent.evidence_text import anchor_extracted_evidence, contains_normalized_evidence
+from mlc_agent.llm import chat_completion_text
 
 
 PART_03_FIELD_IDS = (
@@ -623,7 +624,8 @@ def make_openai_extractor(client: Any, *, model: str) -> StructuredExtractor:
         extracted: dict[str, Any] = {}
         extraction_errors: dict[str, str] = {}
         for key, output_model in schemas:
-            response = client.chat.completions.create(
+            content = chat_completion_text(
+                client,
                 model=model,
                 messages=[
                 {"role": "system", "content": (
@@ -654,7 +656,6 @@ def make_openai_extractor(client: Any, *, model: str) -> StructuredExtractor:
                 ],
                 temperature=0,
             )
-            content = response.choices[0].message.content
             try:
                 if not content:
                     raise ValueError("LLM returned an empty JSON object")

@@ -16,7 +16,14 @@ from mlc_agent.company_supplement import (
     collect_company_supplement,
 )
 from mlc_agent.cninfo import AnnouncementDocument
-from mlc_agent.llm import get_llm_api_key, get_llm_base_url, get_llm_model
+from mlc_agent.llm import (
+    chat_completion_text,
+    get_llm_api_key,
+    get_llm_base_url,
+    get_llm_max_retries,
+    get_llm_model,
+    get_llm_timeout,
+)
 from mlc_agent.operating_performance import ReportDocument, extract_revenue_breakdown
 from mlc_agent.production_adapters import (
     ParsedDisclosure,
@@ -90,7 +97,8 @@ def build_local_annual_bundle(
 def _listed_extractor(client: Any, *, model: str):
     def extract(documents: list[Part01Document], *, as_of: date) -> dict[str, Any]:
         output_model = DisclosureSection[ListedSubsidiary]
-        response = client.chat.completions.create(
+        content = chat_completion_text(
+            client,
             model=model,
             messages=[
                 {"role": "system", "content": (
@@ -108,7 +116,6 @@ def _listed_extractor(client: Any, *, model: str):
             ],
             temperature=0,
         )
-        content = response.choices[0].message.content
         if not content:
             raise ValueError("LLM returned empty listed-subsidiary extraction")
         raw = json.loads(content)
@@ -302,7 +309,12 @@ def run_annual_report_validation(
     load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     api_key = get_llm_api_key()
     parsed = parse_machine_generated_pdf(pdf_path)
-    client = OpenAI(api_key=api_key, base_url=get_llm_base_url(), timeout=60.0)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=get_llm_base_url(),
+        timeout=get_llm_timeout(),
+        max_retries=get_llm_max_retries(),
+    )
     result = validate_parsed_annual_report(
         parsed,
         client=client,

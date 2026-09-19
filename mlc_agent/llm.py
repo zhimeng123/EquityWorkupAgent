@@ -12,6 +12,10 @@ API_KEY_ENV = "DEEPSEEK_API_KEY"
 BASE_URL_ENV = "LLM_BASE_URL"
 MODEL_ENV = "LLM_MODEL"
 MAX_DESCRIPTION_WORDS = 30
+LLM_TIMEOUT_ENV = "LLM_TIMEOUT_SECONDS"
+LLM_MAX_RETRIES_ENV = "LLM_MAX_RETRIES"
+DEFAULT_LLM_TIMEOUT_SECONDS = 300.0
+DEFAULT_LLM_MAX_RETRIES = 1
 
 
 def _load_env() -> None:
@@ -38,6 +42,38 @@ def get_llm_model() -> str:
     return _required_setting(MODEL_ENV)
 
 
+def get_llm_timeout() -> float:
+    _load_env()
+    raw = os.getenv(LLM_TIMEOUT_ENV, "").strip()
+    return float(raw) if raw else DEFAULT_LLM_TIMEOUT_SECONDS
+
+
+def get_llm_max_retries() -> int:
+    _load_env()
+    raw = os.getenv(LLM_MAX_RETRIES_ENV, "").strip()
+    return int(raw) if raw else DEFAULT_LLM_MAX_RETRIES
+
+
+def chat_completion_text(llm_client, *, model, messages, temperature=0.0) -> str:
+    """Return completion text, streaming so gateways do not cut long responses at 60s."""
+    result = llm_client.chat.completions.create(
+        model=model, messages=messages, temperature=temperature, stream=True
+    )
+    # Test doubles and some compatible servers return a complete response object.
+    if hasattr(result, "choices"):
+        content = result.choices[0].message.content
+        return content or ""
+    parts: list[str] = []
+    for event in result:
+        choices = getattr(event, "choices", None)
+        if not choices:
+            continue
+        piece = getattr(choices[0].delta, "content", None)
+        if piece:
+            parts.append(piece)
+    return "".join(parts)
+
+
 def _limit_words(text: str, maximum: int) -> str:
     normalized = " ".join(text.strip().split())
     words = normalized.split()
@@ -55,14 +91,15 @@ def summarize_business_description(
     listing_date: str | None,
     main_business: str | None,
 ) -> str:
-    client = OpenAI(api_key=api_key, base_url=get_llm_base_url(), timeout=30.0)
+    client = OpenAI(api_key=api_key, base_url=get_llm_base_url(), timeout=get_llm_timeout())
     facts = (
         f"Company: {company_name}\n"
         f"Founded date: {founded_date or 'not provided'}\n"
         f"Listing date: {listing_date or 'not provided'}\n"
         f"Main business: {main_business or 'not provided'}"
     )
-    response = client.chat.completions.create(
+    content = chat_completion_text(
+        client,
         model=get_llm_model(),
         messages=[
             {
@@ -78,7 +115,6 @@ def summarize_business_description(
         ],
         temperature=0,
     )
-    content = response.choices[0].message.content
     if not content or not content.strip():
         raise ValueError("LLM returned an empty business description.")
     return _limit_words(content, MAX_DESCRIPTION_WORDS)

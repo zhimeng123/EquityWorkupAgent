@@ -21,6 +21,7 @@ from mlc_agent.audit_changes import (
     RestatementDisclosure,
 )
 from mlc_agent.litigation import MatterDisclosure
+from mlc_agent.llm import chat_completion_text
 from mlc_agent.news import NewsArticle
 from mlc_agent.company_resolver import build_eastmoney_url
 from mlc_agent.cninfo import (
@@ -509,7 +510,8 @@ def extract_pydantic(
         for document in payload.get("documents", []) + payload.get("matter_documents", [])
     ]
     allowed_pages = " Supplied source/page pairs (the only allowed pages): " + "; ".join(supplied_pages) if supplied_pages else ""
-    response = llm_client.chat.completions.create(
+    content = chat_completion_text(
+        llm_client,
         model=model,
         messages=[
             {
@@ -532,7 +534,6 @@ def extract_pydantic(
         ],
         temperature=0,
     )
-    content = response.choices[0].message.content
     if not content:
         raise ValueError(f"LLM returned empty {output_model.__name__} extraction")
     raw = json.loads(content)
