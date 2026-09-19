@@ -615,6 +615,14 @@ def collect_part11_groups(
     the integration boundary, while verified values from other groups remain
     eligible for writing.
     """
+    documents = [
+        EvidenceDocument.model_validate(item) if isinstance(item, dict) else item
+        for item in documents
+    ]
+    matter_documents = [
+        MatterEvidenceDocument.model_validate(item) if isinstance(item, dict) else item
+        for item in matter_documents
+    ]
     values: list[SourceValue] = []
     errors: list[Part11Error] = []
     artifacts: list[Part11Artifact] = []

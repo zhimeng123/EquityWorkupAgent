@@ -11,13 +11,18 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from mlc_agent.audit_changes import (
     AuditRecord,
     EvidenceDocument,
+    FactEvidence,
+    MaterialChangeDisclosure,
+    MaterialChangeEvent,
     Part11Input,
     collect_part11,
+    collect_part11_groups,
     identify_big4,
 )
 from mlc_agent.config import load_template_mapping
 from mlc_agent.docx_writer import validate_template_mapping
 from mlc_agent.news import NewsArticle, select_and_deduplicate_news
+from mlc_agent.production_adapters import Part11BoardChangesExtraction
 
 
 AS_OF = date(2026, 7, 3)
@@ -334,3 +339,43 @@ def test_mapping_matches_template_and_contains_no_underwriting_fields():
     assert len(fields) == 15
     assert not any(any(word in item["field_id"].lower() for word in ("recommend", "premium", "rationale")) for item in fields)
     validate_template_mapping(root / "Workup_template_260617-外测版.docx", fields)
+
+
+def test_collect_part11_groups_accepts_plain_dict_documents():
+    document = {
+        "source": "annual_report",
+        "source_url": ANNUAL,
+        "disclosure_date": "2026-04-20",
+        "period": "FY2025",
+        "text": LATEST_TEXT,
+        "pages": [],
+    }
+    extraction = Part11BoardChangesExtraction(
+        board_officer_changes=MaterialChangeDisclosure(
+            status="yes",
+            events=[MaterialChangeEvent(
+                category="board_officer",
+                event_date=date(2026, 2, 1),
+                details="公司董事长辞任，公司将其明确列为重大管理层变化。",
+                explicit_material=True,
+                evidence=FactEvidence(
+                    source="annual_report", source_url=ANNUAL,
+                    disclosure_date=date(2026, 4, 20), period="FY2025",
+                    evidence_text="2026年2月1日公司董事长辞任，公司将其明确列为重大管理层变化。",
+                    page_number=1,
+                ),
+            )],
+        )
+    )
+    result = collect_part11_groups(
+        documents=[document],
+        matter_documents=[],
+        extracted={"board_changes": extraction},
+        groups={"board_changes"},
+        company_name="紫光股份有限公司",
+        as_of=date(2026, 6, 1),
+        captured_at=CAPTURED,
+        artifact_dir=Path("."),
+    )
+    assert any(value.field_id == "board_officer_material_change" for value in result.source_values)
+    assert not any(error.field_id == "board_officer_material_change" for error in result.errors)
