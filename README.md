@@ -1,180 +1,152 @@
 # Equity Workup Agent
 
-Equity Workup Agent 是一个面向 A 股上市公司的**证据驱动型研究报告生成系统**。用户输入公司名称或股票代码后，系统会采集公开数据、解析定期报告与公告、执行财务及市场分析，并将经过验证的结果写入固定 DOCX 模板。
+面向 A 股上市公司的**证据驱动型研究报告 Skill**。Codex / OpenCode 读取项目级 Skill，
+按固定 Word 模板完成公开信息调研，生成可追溯、可复核的 Word 报告。
 
-项目基于 LangGraph 编排完整工作流，坚持"单 Agent、单 Orchestrator、固定模板映射、严格证据模型"。每个成功字段都会记录数据来源、期间和原始证据；无法可靠生成的字段会保留模板原文，并在失败清单中说明具体原因。
+> 本分支 `codex/greenfield-equity-workup` 是与 `main` 完全独立的绿地实现：
+> 不使用、不导入、不依赖 `main` 的代码、配置、测试、输出或架构；
+> 不包含 LangGraph、Planner、调度器、任务队列或多 Agent Runtime。
+> 规划、调研、查缺和重试顺序由宿主 Agent 负责，脚本只做机械、可复现的工作。
 
-## 核心目的
+## 它是什么
 
-1. **把公开信息整理成一份结构化研究报告**：覆盖公司属性、海外敞口、经营表现、同行比较、财务分析、市场表现、公司治理和风险事件。
-2. **让每个结论都可追溯**：成功字段必须携带 `value`、`source_url`、`period` 和原始证据。
-3. **不补造事实**：没有可靠来源时，不得由 LLM 编造；字段进入明确的失败终态并记录原因。
-4. **确定性计算与大模型提取分离**：财务比率和行情指标由代码计算，大模型仅基于已采集证据执行结构化提取或摘要。
+- 一个 **Skill**：`.agents/skills/equity-workup/`，Codex 与 OpenCode 均可发现。
+- 一份 **契约**：字段清单、模板槽位、证据 schema、输出清单。
+- 一份 **证据策略**：什么算证据、字段状态、固定业务口径。
+- 一份 **调研手册**：一次运行的标准步骤与重试纪律。
+- 三个 **确定性脚本**：财务/行情计算与图表、Word 写入、报告验收与渲染。
 
-## 核心能力
-
-- 对接东方财富、雪球、巨潮资讯和公司官网等公开数据源。
-- 将模板待填内容抽象为字段配置，统一描述 `field_id`、数据来源、模板位置、写入策略和输出格式。
-- 编排 11 个业务分析模块，覆盖公司属性、海外敞口、经营表现、同行比较、财务分析、市场表现、公司治理及风险事件。
-- 按字段级来源优先级合并候选值，并保留来源冲突、失败原因和原始证据。
-- 支持向 DOCX 段落、表格、超链接和图片锚点写入结果。
-- 生成字段结果、证据链、失败记录、执行计划、日志和图表等审计产物。
-
-## 工作流
+## 目录结构
 
 ```text
-initialize_run
-  -> load_template_mapping
-  -> create_execution_plan
-  -> confirm_plan
-  -> resolve_company
-  -> fetch_eastmoney / fetch_xueqiu / fetch_official_site
-  -> shared_disclosures
-  -> part_01 ... part_11
-  -> merge_fields
-  -> write_docx
-  -> generate_evidence_files
-  -> self_check
-  -> finalize_run
+.agents/skills/equity-workup/
+├── SKILL.md
+├── references/
+│   ├── report-contract.md      # 104 个字段 id、模板槽位、证据 schema、输出
+│   ├── evidence-policy.md      # 证据标准、状态、固定业务口径
+│   └── research-playbook.md    # 端到端调研步骤与重试规则
+├── scripts/
+│   ├── calculate_metrics.py    # 比率、增长、回撤、同行中位数、两张股价图
+│   ├── write_report.py         # prepare 工作模板 / write 已验证字段
+│   └── audit_report.py         # 证据、身份、人工区、哈希、渲染逐页校验
+└── tests/                      # pytest 测试
 ```
 
-巨潮资讯公告和报告只采集、下载、解析一次，随后由不同业务模块复用，避免重复请求和重复解析。
+## 输入
 
-## 业务模块
+每次运行需要：
 
-| 模块 | 主要职责 |
-| --- | --- |
-| Part 01 | 国企属性、上市子公司、外部任职及并购信息 |
-| Part 02 | Google Finance、巨潮资讯等公司链接生成与验证 |
-| Part 03 | 美国子公司、收入、员工及其他美国业务敞口 |
-| Part 04 | 收入拆分、季度经营趋势、客户供应商集中度、业务展望与风险 |
-| Part 05 | 关联交易、固定同行选择、同行财务指标比较 |
-| Part 06 | 流动比率、速动比率、资本开支、偿债能力和现金流分析 |
-| Part 07 | 应收账款增长、坏账减值和无形资产风险分析 |
-| Part 08 | IPO、指数及同行对比、异常股价下跌和证券发行分析 |
-| Part 09 | 公司股价图和同行归一化表现图生成 |
-| Part 10 | 高管、董事会、主要股东及全球员工结构分析 |
-| Part 11 | 审计意见、财务重述、重大变化、诉讼监管和负面新闻分析 |
+- **1 家目标 A 股上市公司**；
+- **2 家竞品 A 股上市公司**（默认由用户人工指定；仅在用户明确授权并记录
+  `peer_selection.mode = "user_authorized_auto"` 及 `authorization` / `rationale`
+  时才允许 Agent 自动选择）；
+- 可选的调研截止日期，未提供时使用运行日。
 
-## 已确定的 MVP 业务口径
+Skill 只解析和确认这三家公司的身份，不会在未授权时发现、推荐、排名、替换或补充竞品。
 
-所有开发必须遵守以下已确认口径，不得擅自更改：
+## 工作流程
 
-1. **SOE**：以最终实际控制人是否为国资为准。
-2. **Listed Outside Directorship**：仅检查公司现任董事在其他上市公司的任职。
-3. **"重大"事项**：优先采用公司、审计报告、交易所或监管文件明确标注的"重大/重要/重大资产重组"口径。减值另采用"金额达到最近完整年度归母净利润绝对值的 10%"作为量化条件；归母净利润不为正时，只采用正式披露的重大定性。
-4. **过去 12/24 个月**：均以任务运行日为截止日向前滚动计算。
-5. **同行**：当前 MVP 使用 `configs/fixed_peers.yaml` 按目标股票代码配置恰好三家同行。`000938` 固定为神州数码、浪潮信息和中科曙光；未配置公司明确失败，不调用全市场发现、不自动补足。
-6. **同行 Net Margin**：归母净利润 / 营业收入。Inventory Turnover 使用东方财富同期间已披露指标，不自行换公式补算。
-7. **Liquidity 的 Current/Previous**：最新完整年度与其前一个完整年度。
-8. **公式**：
-   - Current Ratio = 流动资产 / 流动负债；
-   - Quick Ratio =（流动资产 - 存货）/ 流动负债；
-   - CAPEX = 购建固定资产、无形资产和其他长期资产支付的现金，输出为正数；
-   - CAPEX to Revenue = CAPEX / 营业收入；
-   - Interest Coverage =（营业利润 + 利息费用）/ 利息费用；
-   - Debt to Asset = 总负债 / 总资产。
-9. **NOI**：MVP 中定义为归母净利润。`Cash Flow > NOI` 比较经营活动现金流净额是否大于归母净利润；另一个问题比较归母净利润是否大于经营活动现金流净额。
-10. **重大短期债务压力**：最新报告期货币资金小于短期借款时为 Yes。持续正经营现金流要求最近两个完整年度均大于零。
-11. **应收账款增长**：只使用资产负债表"应收账款"，不并入应收票据、应收款项融资和合同资产。减值占应收账款比例的分母使用期末应收账款账面原值。
-12. **股价**：绩效、回撤和图表使用前复权日收盘价；当前价和 52 周高低仍使用未复权真实行情。深圳、上海、北京分别使用深证成指、上证综指、北证 50。24 个月累计收益与基准或同行中位数相差不超过 15 个百分点视为 Align；显著下跌为 24 个月内最大峰谷回撤不低于 30%。
-13. **图表**：使用可靠行情数据生成，不截取雪球网页。公司图显示前复权价格；同行图以首日 100 归一化。图片宽度 6.3 英寸、高度按比例自适应，PNG 至少 1600×750。
-14. **主要股东**：使用同一报告期前十大股东。内部人士关系只接受报告明确披露；未明确时写 `Not disclosed`，不得推断。
-15. **诉讼**：包括最新报告仍未决的重大案件，无论起始时间；历史案件回溯运行日前 24 个月。
-16. **负面新闻**：回溯 12 个月，检索中文和英文；搜索引擎只用于发现，证据必须落到原始媒体、公司、交易所或监管 URL。附件使用 DOCX。无法抓取正文时只保留日期、标题、来源、URL 和 `Full text unavailable`，不得生成正文摘要。
-17. **人名和公司名**：优先使用官方英文名；没有官方英文名时保留中文专有名词，不自行翻译或拼音化，周围说明仍使用英文。
+```text
+write_report.py prepare     # 复制原模板、3 家同行→2 家竞品、加稳定书签、记录原模板哈希
+   ↓
+宿主 Agent 调研             # 用宿主自带的搜索 / 下载 / PDF / Word 能力，逐字段立即存证
+   ↓
+calculate_metrics.py        # 确定性计算与两张图
+   ↓
+write_report.py write       # 只写入合格字段，人工核保区永不写入
+   ↓
+audit_report.py --render    # 验收 + 逐页渲染
+```
 
-## 字段与证据模型
+## 输出
 
-模板字段定义位于 `configs/fixed_template_mapping.yaml` 和 `configs/fields/part_XX.yaml`，数据来源优先级位于 `configs/source_priority_policy.yaml`。
+每次运行至少产生：
 
-字段处理遵循以下原则：
+```text
+result.docx                       # 最终报告
+working-template.docx             # 工作模板副本
+template-manifest.json            # 原模板哈希、工作模板哈希、书签映射
+evidence.json                     # 字段级证据
+gaps.json                         # 未完成字段及原因、尝试记录
+run-plan.json                     # 三家身份、截止日、peer_selection
+metrics.json                      # 确定性计算结果
+standalone-stock-chart.png        # 目标公司股价图
+competitor-comparison-chart.png   # 目标 + 两家竞品归一化对比图
+audit.json                        # 验收结果
+renders/page-N.png                # 逐页渲染，供人工复核排版
+```
 
-1. 业务模块生成带来源、期间和原始证据的候选值。
-2. 合并阶段按照字段级来源优先级选择最终结果。
-3. 多个来源结果不一致时保留冲突记录。
-4. 字段缺少可靠证据或未通过校验时，不推断、不补造，并写入 `failed_fields.json`。
-5. 自检阶段验证字段覆盖、证据完整性、模板写入结果和输出文件有效性。
+## 证据模型
 
-## 技术栈
+字段状态只允许：`supported`、`derived`、`not_disclosed`、`not_applicable`、
+`unresolved`。只有前四种会写入报告；`unresolved` 只进入 `gaps.json`，绝不伪装成
+`No` / `Not disclosed`。没有搜索结果不能作为 `No` 的证据，大模型输出不能作为事实来源。
 
-- Python 3.13
-- LangGraph 1.2.7
-- Pydantic 2.13.4
-- OpenAI SDK 2.44.0（接入 DeepSeek / 兼容网关）
-- HTTPX、Beautiful Soup、pdfplumber
-- python-docx、Matplotlib
-- Pytest
+## 人工核保区（永不自动填写）
 
-完整版本约束见 `pyproject.toml`。
+`Underwriter`、`Branch`、`Producer`、`Commission`、`Reason for Referral`、
+`Date Approval Required`、`Overall Relationship`、`Brief of Competition`、
+`Clearance Obtained`、`New Business or Renewal`、`Written Since`、`Premium Earned`、
+`Claim History`、`Recommendation`、`Recommended D&O`、`Recommended POSI`、
+`Subjectivities`、`Rated Premium` 及定价理由、`Sign-off`、`Date`。
+`write_report.py` 硬拒绝这些字段，`audit_report.py` 逐表比对原文证明未被改动。
 
 ## 安装
 
 ```bash
 python3.13 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-cp .env.example .env
+# 或
+uv venv && uv pip install -e '.[dev]'
 ```
 
-在 `.env` 中配置：
-
-```dotenv
-DEEPSEEK_API_KEY=
-LLM_BASE_URL=https://tokenrhythm.studio/v1
-LLM_MODEL=qwen3.8-flash
-LLM_TIMEOUT_SECONDS=300
-LLM_MAX_RETRIES=1
-```
-
-`DEEPSEEK_API_KEY` 是历史变量名，当前作为通用 LLM API Key 使用。`.env` 仅用于本地运行，不应提交到版本控制。
+依赖：`python-docx`、`matplotlib`（渲染另需 `pymupdf`；渲染引擎用 LibreOffice 或
+Microsoft Word）。**请勿提交 `.env` 等本地模型配置，已在 `.gitignore` 中忽略。**
 
 ## 运行
 
 ```bash
-.venv/bin/python -m mlc_agent run \
-  --template './Workup_template_260617-外测版.docx' \
-  --company '000938' \
-  --output './outputs' \
-  --yes
+python .agents/skills/equity-workup/scripts/write_report.py prepare \
+  --template "Workup_template_260617-外测版.docx" \
+  --out <run-dir>/working-template.docx \
+  --manifest <run-dir>/template-manifest.json
+
+python .agents/skills/equity-workup/scripts/calculate_metrics.py \
+  --input <run-dir>/metrics-input.json \
+  --output <run-dir>/metrics.json \
+  --chart-dir <run-dir>
+
+python .agents/skills/equity-workup/scripts/write_report.py write \
+  --working <run-dir>/working-template.docx \
+  --evidence <run-dir>/evidence.json \
+  --out <run-dir>/result.docx \
+  --charts <run-dir>
+
+python .agents/skills/equity-workup/scripts/audit_report.py \
+  --run <run-dir> \
+  --template "Workup_template_260617-外测版.docx" \
+  --render
 ```
 
-`--company` 支持无歧义的 A 股公司名称或六位股票代码。移除 `--yes` 后，CLI 会展示执行计划并等待确认。
-
-## 输出
-
-每次运行会在 `outputs/` 下创建独立目录，主要包含：
-
-- `result.docx`：最终报告。
-- `extracted_data.json`：运行状态及结构化结果。
-- `sources.json`：字段级来源与证据记录。
-- `failed_fields.json`：未完成字段及失败原因。
-- `execution_plan.json`：工作流执行状态。
-- `self_check_result.json`：自检结果。
-- `run.log`：运行日志。
-- `standalone_stock_chart.png`：公司股价走势图。
-- `peer_comparison_chart.png`：同行归一化股价对比图。
-
-严格验收使用 `scripts/audit_full_acceptance.py <run_dir> --render`。
-
-## 测试
+## 测试与校验
 
 ```bash
+.venv/bin/ruff check .
 .venv/bin/python -m pytest -o addopts="" -q
 ```
 
-测试覆盖公司解析、模板映射、来源优先级、财务计算、公告证据提取、同行分析、市场历史、图表生成、失败隔离以及完整 LangGraph 工作流。
+## 边界
 
-## 当前边界
-
-- 当前版本面向项目内固定 DOCX 模板，不会运行时解析任意 Word 文档并自动生成字段定义。
-- 当前只支持无歧义的 A 股上市公司。
-- Part 05 从 `configs/fixed_peers.yaml` 读取目标公司预设的三家同行；未配置时明确失败。
-- 雪球行情不可用时，由字段来源优先级决定是否采用东方财富候选值。
-- LLM 仅处理已经抓取并携带来源信息的证据，不作为原始事实来源。
-- 未满足的状态见 `TodoList/项目未满足状态.md`。
+- 只支持 A 股上市公司；不自动发现竞品（除非用户明确授权并留痕）。
+- 不开发新的 Agent 框架 / 工作流引擎；不绕过网站访问控制。
+- 不自动填写内部核保意见、推荐与定价。
+- 不为了提高填写率而编造、推断或弱化证据标准。
+- 原始 Word 模板在整个过程中保持不变，所有写入都在工作模板副本上进行。
 
 ## 风险提示与责任声明
 
-本项目仅用于技术研究、学习和公开信息整理，不构成投资建议、法律意见或任何形式的专业承诺。项目会自动访问第三方网站、接口并采集公开数据；不同数据源的服务条款、robots 规则、访问授权、频率限制、著作权及数据权益要求可能不同。使用者在运行、修改、部署或分发本项目前，应自行核实并遵守适用的法律法规及第三方规则；不得绕过登录验证、验证码、访问控制、反爬或其他技术保护措施，也不得采集、处理或传播无合法依据的个人信息、非公开数据或受保护内容。
-
-使用者应自行承担因使用本项目及其输出产生的全部风险与责任，包括但不限于账号或 IP 限制、第三方索赔、行政或刑事责任以及投资损失。开发者不对数据的准确性、完整性、时效性、可用性作任何保证，也不对使用本项目造成的直接或间接损失承担责任；但适用法律规定不得排除或限制的责任除外。所有数据及分析结果均应结合原始披露文件进行人工复核。
+本项目仅用于技术研究、学习和公开信息整理，不构成投资建议、法律意见或任何形式的
+专业承诺。项目会访问第三方网站并采集公开数据，使用者应自行遵守适用的法律法规及
+第三方规则，不得绕过登录验证、验证码、访问控制或反爬措施，也不得采集、处理或传播
+无合法依据的个人信息或受保护内容。开发者不对数据的准确性、完整性、时效性作任何
+保证，也不对使用本项目造成的损失承担责任；所有结论均应结合原始披露文件人工复核。

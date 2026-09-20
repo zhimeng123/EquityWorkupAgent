@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+*.egg-info/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Secrets / local model configuration (never commit)
+.env
+.env.*
+*.env
+!.env.example
+
+# Generated run artifacts (never commit report outputs)
+sample-run/
+runs/
+outputs/
+renders/
+
+# OS
+.DS_Store
